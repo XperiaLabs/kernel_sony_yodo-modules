@@ -1,4 +1,4 @@
-service vendor.aks.gamepad-1-0 /vendor/bin/hw/vendor.aks.gamepad@1.0-service
+service vendor.aks.gamepad /vendor/bin/hw/vendor.aks.gamepad@1.0-service
     class hal
     user system
     group system
