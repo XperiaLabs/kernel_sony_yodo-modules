@@ -16,7 +16,7 @@ char user_flag[100];
 
 int work_mode_flag = 1;
     
-#define DEVICE_NAME "simple"  
+#define DEVICE_NAME "aks_js_ctl"  
     
     
 int aks_joystick_controller_open (struct inode *inode, struct file *filp)  
