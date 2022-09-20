@@ -5,3 +5,4 @@ PRODUCT_PACKAGES += vendor.shadowcreator.hardware.nordic@1.0 \
      controller_service_test \
      libnordic_command
 
+PRODUCT_PACKAGES += nordic.rc

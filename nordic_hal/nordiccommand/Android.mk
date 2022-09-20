@@ -8,6 +8,7 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_VENDOR_MODULE := true
 LOCAL_CFLAGS += -Wall
 LOCAL_CFLAGS += -Wno-unused-parameter
+LOCAL_INIT_RC := nordic.rc
 
 LOCAL_C_INCLUDES := $(TOP)/system/memory/libion/include \
 					$(TOP)/system/memory/libion/kernel-headers \
