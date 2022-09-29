@@ -1,0 +1,1 @@
+4cc15867fb0ff0e7444df03e04afd1c91d0fde4cdfaabfca0884710d5ce8220e vendor.aks.gamepad@1.0::IGamepad

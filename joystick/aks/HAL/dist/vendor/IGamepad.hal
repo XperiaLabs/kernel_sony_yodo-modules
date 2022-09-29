@@ -1,0 +1,142 @@
+package vendor.aks.gamepad@1.0;
+
+interface IGamepad {
+    initial(string name) generates (string result);
+	
+		/**
+	 * By calling this interface, you can get the gamepad service client instance in the HAL
+	 * @param retry indicates whether to continue trying to start the service when the server does not exist
+	 * @return IGamepad
+	 */
+	// IGamepad getGamepadService(boolean retry);
+
+	/**
+	 * Enable/wake up the gamepad device, due to the automatic sleep mechanism in the driver,
+	 * this interface will be subsequently evaluated according to the actual situation whether it is reserved
+	 */
+	enableGamepad() generates (int32_t result);
+
+	/**
+	 * Disable/sleep the gamepad device. Since the driver uses an automatic sleep mechanism,
+	 * the interface will be subsequently evaluated according to the actual situation whether it is reserved
+	 */
+	disableGamepad() generates (int32_t result);
+
+	/**
+	 * Call this interface to set Working mode
+	 * @param mode indicates the working mode to be set, 1 means Multi-touch mode, 2 means game-controller mode
+	 * @return boolean means whether the setting is successful, true means success, false means failure
+	 */
+    setWorkMode(int32_t mode);
+
+    /**
+     * Call this interface to obtain the current working mode
+     * @return type mode
+     *      1 indicates that the current work is in Multi-touch mode,
+     *      2 indicates that it is working in the game-controller mode,
+     *      -1 indicates that it failed to obtain the working mode
+     */
+    getWorkMode() generates (int32_t mode);
+
+    /**
+     * The display of the LED is bound to the working mode, so this interface should not be called manually,
+     * but should be automatically switched with the change of the working mode of the gamepad.
+     * The interface will be subsequently evaluated according to the actual situation whether it is retained
+     * @param ledMode indicates the LED display mode to be set, 1 means Multi-touch display mode, 2 means game-controller display mode
+     * @return means whether the setting is successful, true means success, false means failure
+     */
+    setWorkModeLED(int32_t ledMode) generates (int32_t result);
+
+    /**
+     * Call this interface to obtain the LED light status of the current controller working mode
+     * @return type data 1 indicates that the current working mode is Multi-touch,
+     *          2 indicates that it is working in the game-controller mode, -1 indicates that it failed to obtain the working mode
+     */
+    getWorkModeLED() generates (int32_t workMode);
+
+    /**
+     * Call this interface to set mapping coordinates and additional data
+     * @param index Since the mapping data has 4 slots, the user can choose the space to store the mapping data.
+     * @param mappingData indicates the mapping coordinates and additional data to be set
+     * @return indicates whether the setting is successful, true is success, false is failure
+     */
+    setMappingData(int32_t index, string mappingHexData) generates (int32_t result);
+
+	/**
+	 * Call this interface to get the mapping coordinates and additional data
+	 * @param index Since the mapping data has 4 slots, the user can choose the space to store the mapping data.
+	 * @return get the current mapping coordinates and additional data
+	 */
+    getMappingData(int32_t index) generates (string mappingData);
+
+    /**
+     * Call this interface to reset the gamepad data
+     * @return boolean, indicates whether the reset Gamepad data is successful
+     */
+    resetGamepad() generates (int32_t result);
+
+	/**
+	 * Code that has already been developed by the Drakon project.
+	 * @param index Select Function Key 1 / Function Key 2
+     *            If the device has only Function Key 1, fill in the value with 1 in the index place and use it.
+	 * @param option Enter the function code number to set (0 to 12)
+	 * @param data Detailed data for each function code
+	 * @return means whether the setting is successful, true means success, false means failure
+	 */
+    setFunctionKey(int32_t index, int32_t option, string data) generates (int32_t result);
+
+	/**
+	 * Ready code for stick calibration.
+	 * The stick correction function is a tool to solve the problem of not working properly when operating a physical stick.
+	 * Code that has already been developed by the Drakon project.
+	 * @param option
+	 *           0 - Check L-Stick Center, 1 - Check L-Stick Edge,
+	 *           2 - Check R-Stick Center, 3 - Check R-Stick Edge,
+	 *           4 - Check LT Release, 5 - Check LT Press,
+	 *           6 - Check RT Release, 7 - Check RT Press
+	 * @param recordType
+	 *       	 0 = stop record, 1 = start record, 2 = save, 3 = clear.
+	 * @return means whether the setting is successful, true means success, false means failure
+	 */
+    setCalibration(int32_t option, int32_t recordType) generates (int32_t result);
+
+	/**
+	 * It triggers a short vibration immediately when a button on the gamepad is pressed.
+     * The operating length only works for as short as 100ms after the button is pressed.
+     * The LT/RT button is exceptionally active while it is being pressed, which causes it to act as hard as it is pressed.
+	 * @param buttonArray = A byte array that is 8 bytes long.
+     *     The order of the buttons is as follows.
+     *     index     | 0 ~ 5              |  6,  7
+     *     button    | A, B, X, Y, LB, RB | LT, RT
+     *     available | 0x00 ~ 0xFF        | 0x00, 0xFF only
+     *     For each byte, a value from 0x00 to 0xFF is used.
+     *     LT/RT is using only 0 (0x00) and -1(=0xFF)
+     *     default result = [ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ]
+	 * @return means whether the setting is successful, true means success, false means failure
+	 */
+    setActiveVibration(string buttonArray) generates (int32_t result);
+
+	/**
+	 * For Android Mode Only.
+	 * Change the physics button on the gamepad to another button to make it work.
+     * LT/RT both work as regular buttons, no axis values are applied.
+	 * If the byte array index and the byte value are the same, they are configured in the original button mapping order.
+	 * @param buttonArray = A byte array that is 10 bytes long.
+     *     The order of the buttons is as follows.
+     *     index / bitindex | 0, 1, 2, 3, 4,  5,  6,  7,  8,     9
+     *     button           | A, B, X, Y, LB, RB, LT, RT, Start, Select
+     *     default result = [ 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 ]
+	 * @return boolean, means whether the setting is successful, true means success, false means failure
+	 */
+    setButtonMapping(string buttonArray) generates (int32_t result);
+
+    /**
+     * Check the currently applied button layout information.
+     * @return buttonArray = A byte array that is 10 bytes long.
+     *     The order of the buttons is as follows.
+     *     index / bitindex | 0, 1, 2, 3, 4,  5,  6,  7,  8,     9
+     *     button           | A, B, X, Y, LB, RB, LT, RT, Start, Select
+     *     default result = [ 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 ]
+     */
+    getButtonMapping() generates (string buttonMappingData);
+};
