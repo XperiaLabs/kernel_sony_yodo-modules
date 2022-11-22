@@ -3,7 +3,7 @@
  * ADS1015 - Texas Instruments Analog-to-Digital Converter
  *
  * Copyright (c) 2016, Intel Corporation.
- *
+ * 
  * IIO driver for ADS1015 ADC 7-bit I2C slave address:
  *	* 0x48 - ADDR connected to Ground
  *	* 0x49 - ADDR connected to Vdd
@@ -20,17 +20,28 @@
 #include <linux/pm_runtime.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
+#include <linux/types.h>
+#include <linux/kthread.h>
+
+#include <linux/of_gpio.h>
+#include <linux/regulator/consumer.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/types.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/events.h>
 #include <linux/iio/buffer.h>
+#include <linux/iio/trigger.h>
 #include <linux/iio/triggered_buffer.h>
 #include <linux/iio/trigger_consumer.h>
 
-#define ADS1015_DRV_NAME "ads1015"
+#define	GET_BIT(x, bit)	((x & (1 << bit)) >> bit)	/* 获取第bit位 */
 
+#define ADS1015_DRV_NAME "aks-ads1015"
+
+#define TEST_KTHREAD 0 
+#define ENABLE_IRQ_PIN	0
+#define ENABLE_VDD_CONFIG 1
 #define ADS1015_CHANNELS 8
 
 #define ADS1015_CONV_REG	0x00
@@ -47,6 +58,7 @@
 #define ADS1015_CFG_PGA_SHIFT	9
 #define ADS1015_CFG_MUX_SHIFT	12
 
+//#define ADS1015_CFG_COMP_QUE_MASK	(unsigned int)(~ GENMASK(1, 0))
 #define ADS1015_CFG_COMP_QUE_MASK	GENMASK(1, 0)
 #define ADS1015_CFG_COMP_LAT_MASK	BIT(2)
 #define ADS1015_CFG_COMP_POL_MASK	BIT(3)
@@ -58,6 +70,10 @@
 
 /* Comparator queue and disable field */
 #define ADS1015_CFG_COMP_DISABLE	3
+#define ADS1015_CFG_COMP_ASSERT_AFTER_ONE_CONV	0
+#define ADS1015_CFG_COMP_ASSERT_AFTER_TWO_CONV	1
+#define ADS1015_CFG_COMP_ASSERT_AFTER_THREE_CONV	2
+#define ADS1015_CFG_COMP_ASSERT_MODE ADS1015_CFG_COMP_ASSERT_AFTER_THREE_CONV
 
 /* Comparator polarity field */
 #define ADS1015_CFG_COMP_POL_LOW	0
@@ -75,6 +91,14 @@
 #define ADS1015_DEFAULT_PGA		2
 #define ADS1015_DEFAULT_DATA_RATE	4
 #define ADS1015_DEFAULT_CHAN		0
+
+#define VDD_LOAD_uA	(100000)
+#define VDD_LOAD_uV	(3000000)
+#define VDD_MIN_uV	(3000000)
+#define VDD_MAX_uV	(3000000)
+
+int last_conv_val;
+
 
 enum chip_ids {
 	ADSXXXX = 0,
@@ -252,18 +276,25 @@ struct ads1015_data {
 	 * getting the stale result from the conversion register.
 	 */
 	bool conv_invalid;
+
+	struct device *dev;
+	struct regulator *vdd_reg;
+	struct iio_trigger *trigger;
+	int irq;
 };
+
+struct device *global_dev;
+
 
 static bool ads1015_event_channel_enabled(struct ads1015_data *data)
 {
-	return (data->event_channel != ADS1015_CHANNELS);
+	return data->event_channel != ADS1015_CHANNELS;
 }
 
 static void ads1015_event_channel_enable(struct ads1015_data *data, int chan,
 					 int comp_mode)
 {
 	WARN_ON(ads1015_event_channel_enabled(data));
-
 	data->event_channel = chan;
 	data->comp_mode = comp_mode;
 }
@@ -275,6 +306,8 @@ static void ads1015_event_channel_disable(struct ads1015_data *data, int chan)
 
 static bool ads1015_is_writeable_reg(struct device *dev, unsigned int reg)
 {
+	//dev_err(global_dev, "%s(%d)...\n",__FUNCTION__, __LINE__);
+
 	switch (reg) {
 	case ADS1015_CFG_REG:
 	case ADS1015_LO_THRESH_REG:
@@ -323,8 +356,10 @@ static int ads1015_set_power_state(struct ads1015_data *data, bool on)
 	struct device *dev = regmap_get_device(data->regmap);
 
 	if (on) {
+		//dev_err(global_dev, "%s(%d) power on...\n",__FUNCTION__, __LINE__);
 		ret = pm_runtime_resume_and_get(dev);
 	} else {
+		//dev_err(global_dev, "%s(%d) power down...\n",__FUNCTION__, __LINE__);
 		pm_runtime_mark_last_busy(dev);
 		ret = pm_runtime_put_autosuspend(dev);
 	}
@@ -346,13 +381,16 @@ int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)
 {
 	int ret, pga, dr, dr_old, conv_time;
 	unsigned int old, mask, cfg;
-
-	if (chan < 0 || chan >= ADS1015_CHANNELS)
+	if (chan < 0 || chan >= ADS1015_CHANNELS) {
+		dev_err(global_dev, "%s(%d) error: -22\n",__FUNCTION__, __LINE__);
 		return -EINVAL;
+	}
 
 	ret = regmap_read(data->regmap, ADS1015_CFG_REG, &old);
-	if (ret)
+	if (ret) {
+		dev_err(global_dev, "%s(%d) regmap_read ads1015 config error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	}
 
 	pga = data->channel_data[chan].pga;
 	dr = data->channel_data[chan].data_rate;
@@ -372,8 +410,10 @@ int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)
 	cfg = (old & ~mask) | (cfg & mask);
 	if (old != cfg) {
 		ret = regmap_write(data->regmap, ADS1015_CFG_REG, cfg);
-		if (ret)
+		if (ret) {
+			dev_err(global_dev, "%s(%d) regmap_write ads1015 config error: %d\n",__FUNCTION__, __LINE__, ret);
 			return ret;
+		}
 		data->conv_invalid = true;
 	}
 	if (data->conv_invalid) {
@@ -388,35 +428,79 @@ int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)
 	return regmap_read(data->regmap, ADS1015_CONV_REG, val);
 }
 
+#if 0
+irqreturn_t sensor_trigger_handler(int irq, void *p)
+{
+	u16 buf[8];
+	int i = 0;
+
+	/* read data for each active channel */
+	for_each_set_bit(bit, active_scan_mask, masklength)
+		buf[i++] = sensor_get_data(bit)
+
+	iio_push_to_buffers_with_timestamp(indio_dev, buf, timestamp);
+
+	iio_trigger_notify_done(trigger);
+	return IRQ_HANDLED;
+}
+#endif
+
 static irqreturn_t ads1015_trigger_handler(int irq, void *p)
 {
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct ads1015_data *data = iio_priv(indio_dev);
+	
+#if 1
+	int ret, res, bit, i=0;
+	struct {
+		s16 chans[3];
+		s64 timestamp __aligned(8);
+	} scan;
+
+	//dev_err(global_dev, "%s(%d) indio_dev->active_scan_mask=0x%X, indio_dev->masklength=%d\n",__FUNCTION__, __LINE__, indio_dev->active_scan_mask, indio_dev->masklength);
+	mutex_lock(&data->lock);
+	for_each_set_bit(bit, indio_dev->active_scan_mask, indio_dev->masklength) {
+		ret = ads1015_get_adc_result(data, bit, &res);
+		if (ret < 0) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
+			mutex_unlock(&data->lock);
+			goto err;
+		}
+		scan.chans[i++] = res;
+	}
+	mutex_unlock(&data->lock);
+	
+	//dev_err(global_dev, "%s(%d) Triggered channels=%d, data[0]=0x%X, data[1]=0x%X, data[2]=0x%X\n",__FUNCTION__, __LINE__, i, scan.chans[0], scan.chans[1], scan.chans[2]);
+	iio_push_to_buffers_with_timestamp(indio_dev, &scan, iio_get_time_ns(indio_dev));
+#else
 	/* Ensure natural alignment of timestamp */
 	struct {
 		s16 chan;
 		s64 timestamp __aligned(8);
 	} scan;
-	int chan, ret, res;
 
+	int chan, ret, res;
 	memset(&scan, 0, sizeof(scan));
 
 	mutex_lock(&data->lock);
-	chan = find_first_bit(indio_dev->active_scan_mask,
-			      indio_dev->masklength);
+	chan = find_first_bit(indio_dev->active_scan_mask, indio_dev->masklength);
+	
 	ret = ads1015_get_adc_result(data, chan, &res);
 	if (ret < 0) {
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		mutex_unlock(&data->lock);
 		goto err;
 	}
+
+	dev_err(global_dev, "[%d]Triggered chanel = %d, 0x%X \n", __LINE__, chan, res);
 
 	scan.chan = res;
 	mutex_unlock(&data->lock);
 
 	iio_push_to_buffers_with_timestamp(indio_dev, &scan,
 					   iio_get_time_ns(indio_dev));
-
+#endif
 err:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -428,8 +512,7 @@ static int ads1015_set_scale(struct ads1015_data *data,
 			     int scale, int uscale)
 {
 	int i;
-	int fullscale = div_s64((scale * 1000000LL + uscale) <<
-				(chan->scan_type.realbits - 1), 1000000);
+	int fullscale = div_s64((scale * 1000000LL + uscale) << (chan->scan_type.realbits - 1), 1000000);
 
 	for (i = 0; i < ARRAY_SIZE(ads1015_fullscale_range); i++) {
 		if (ads1015_fullscale_range[i] == fullscale) {
@@ -437,7 +520,7 @@ static int ads1015_set_scale(struct ads1015_data *data,
 			return 0;
 		}
 	}
-
+	dev_err(global_dev, "%s(%d) error...\n",__FUNCTION__, __LINE__);
 	return -EINVAL;
 }
 
@@ -451,7 +534,7 @@ static int ads1015_set_data_rate(struct ads1015_data *data, int chan, int rate)
 			return 0;
 		}
 	}
-
+	dev_err(global_dev, "%s(%d) error...\n",__FUNCTION__, __LINE__);
 	return -EINVAL;
 }
 
@@ -461,37 +544,46 @@ static int ads1015_read_raw(struct iio_dev *indio_dev,
 {
 	int ret, idx;
 	struct ads1015_data *data = iio_priv(indio_dev);
-
 	mutex_lock(&data->lock);
+
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW: {
 		int shift = chan->scan_type.shift;
 
 		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
+		if (ret) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			break;
+		}
 
 		if (ads1015_event_channel_enabled(data) &&
 				data->event_channel != chan->address) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			ret = -EBUSY;
 			goto release_direct;
 		}
 
 		ret = ads1015_set_power_state(data, true);
-		if (ret < 0)
+		if (ret < 0) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			goto release_direct;
+		}
 
 		ret = ads1015_get_adc_result(data, chan->address, val);
 		if (ret < 0) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			ads1015_set_power_state(data, false);
 			goto release_direct;
 		}
 
 		*val = sign_extend32(*val >> shift, 15 - shift);
+		//dev_err(global_dev, "sign_extend32= %d\n", *val);
 
 		ret = ads1015_set_power_state(data, false);
-		if (ret < 0)
+		if (ret < 0) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			goto release_direct;
+		}
 
 		ret = IIO_VAL_INT;
 release_direct:
@@ -511,6 +603,7 @@ release_direct:
 		break;
 	default:
 		ret = -EINVAL;
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		break;
 	}
 	mutex_unlock(&data->lock);
@@ -526,6 +619,7 @@ static int ads1015_write_raw(struct iio_dev *indio_dev,
 	int ret;
 
 	mutex_lock(&data->lock);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 	switch (mask) {
 	case IIO_CHAN_INFO_SCALE:
 		ret = ads1015_set_scale(data, chan, val, val2);
@@ -535,6 +629,7 @@ static int ads1015_write_raw(struct iio_dev *indio_dev,
 		break;
 	default:
 		ret = -EINVAL;
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		break;
 	}
 	mutex_unlock(&data->lock);
@@ -554,6 +649,7 @@ static int ads1015_read_event(struct iio_dev *indio_dev,
 	int dr;
 
 	mutex_lock(&data->lock);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	switch (info) {
 	case IIO_EV_INFO_VALUE:
@@ -574,6 +670,7 @@ static int ads1015_read_event(struct iio_dev *indio_dev,
 		break;
 	default:
 		ret = -EINVAL;
+		dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 		break;
 	}
 
@@ -595,11 +692,13 @@ static int ads1015_write_event(struct iio_dev *indio_dev,
 	int dr;
 
 	mutex_lock(&data->lock);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	switch (info) {
 	case IIO_EV_INFO_VALUE:
 		if (val >= 1 << (realbits - 1) || val < -1 << (realbits - 1)) {
 			ret = -EINVAL;
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			break;
 		}
 		if (dir == IIO_EV_DIR_RISING)
@@ -620,6 +719,7 @@ static int ads1015_write_event(struct iio_dev *indio_dev,
 		break;
 	default:
 		ret = -EINVAL;
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		break;
 	}
 
@@ -636,6 +736,8 @@ static int ads1015_read_event_config(struct iio_dev *indio_dev,
 	int ret = 0;
 
 	mutex_lock(&data->lock);
+	
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 	if (data->event_channel == chan->address) {
 		switch (dir) {
 		case IIO_EV_DIR_RISING:
@@ -646,6 +748,7 @@ static int ads1015_read_event_config(struct iio_dev *indio_dev,
 			break;
 		default:
 			ret = -EINVAL;
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 			break;
 		}
 	}
@@ -661,12 +764,15 @@ static int ads1015_enable_event_config(struct ads1015_data *data,
 	int high_thresh = data->thresh_data[chan->address].high_thresh;
 	int ret;
 	unsigned int val;
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	if (ads1015_event_channel_enabled(data)) {
 		if (data->event_channel != chan->address ||
 			(data->comp_mode == ADS1015_CFG_COMP_MODE_TRAD &&
-				comp_mode == ADS1015_CFG_COMP_MODE_WINDOW))
+				comp_mode == ADS1015_CFG_COMP_MODE_WINDOW)) {
+			dev_err(global_dev, "%s(%d) EBUSY.\n",__FUNCTION__, __LINE__);
 			return -EBUSY;
+		}
 
 		return 0;
 	}
@@ -677,17 +783,23 @@ static int ads1015_enable_event_config(struct ads1015_data *data,
 	}
 	ret = regmap_write(data->regmap, ADS1015_LO_THRESH_REG,
 			low_thresh << chan->scan_type.shift);
-	if (ret)
+	if (ret) {
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	}
 
 	ret = regmap_write(data->regmap, ADS1015_HI_THRESH_REG,
 			high_thresh << chan->scan_type.shift);
-	if (ret)
+	if (ret) {
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	}
 
 	ret = ads1015_set_power_state(data, true);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	}
 
 	ads1015_event_channel_enable(data, chan->address, comp_mode);
 
@@ -704,7 +816,7 @@ static int ads1015_disable_event_config(struct ads1015_data *data,
 	const struct iio_chan_spec *chan, int comp_mode)
 {
 	int ret;
-
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 	if (!ads1015_event_channel_enabled(data))
 		return 0;
 
@@ -717,10 +829,12 @@ static int ads1015_disable_event_config(struct ads1015_data *data,
 
 	ret = regmap_update_bits(data->regmap, ADS1015_CFG_REG,
 				ADS1015_CFG_COMP_QUE_MASK,
-				ADS1015_CFG_COMP_DISABLE <<
+				ADS1015_CFG_COMP_ASSERT_MODE <<
 					ADS1015_CFG_COMP_QUE_SHIFT);
-	if (ret)
+	if (ret) {
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	}
 
 	ads1015_event_channel_disable(data, chan->address);
 
@@ -737,11 +851,13 @@ static int ads1015_write_event_config(struct iio_dev *indio_dev,
 		ADS1015_CFG_COMP_MODE_WINDOW : ADS1015_CFG_COMP_MODE_TRAD;
 
 	mutex_lock(&data->lock);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	/* Prevent from enabling both buffer and event at a time */
 	ret = iio_device_claim_direct_mode(indio_dev);
 	if (ret) {
 		mutex_unlock(&data->lock);
+		dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
 	}
 
@@ -755,23 +871,131 @@ static int ads1015_write_event_config(struct iio_dev *indio_dev,
 
 	return ret;
 }
+#if 0
+static int ads1015_set_trigger_state(struct iio_trigger *trig, bool state)
+{
+	const struct iio_dev         *indio_dev = dev_get_drvdata(trig->dev.parent);
+	const struct ads1015_data    *priv = iio_priv(indio_dev);
+	int                           err;
 
+	if (!state) {
+		/*
+		 * Switch trigger off : in case of failure, interrupt is left
+		 * disabled in order to prevent handler from accessing released
+		 * resources.
+		 */
+		unsigned int val;
+
+		/*
+		 * As device is working in continuous mode, handlers may be
+		 * accessing resources we are currently freeing...
+		 * Prevent this by disabling interrupt handlers and ensure
+		 * the device will generate no more interrupts unless explicitly
+		 * required to, i.e. by restoring back to default one shot mode.
+		 */
+		//disable_irq(priv->irq);
+
+		/*
+		 * Disable continuous sampling mode to restore settings for
+		 * one shot / direct sampling operations.
+		 */
+		err = ads1015_set_conv_mode(priv, ADS1015_SINGLESHOT);
+		if (err) {
+			dev_err(global_dev, "Can not switch to single shot mode");
+			return err;
+		}
+
+		/*
+		 * Re-enable interrupts only if we can guarantee the device will
+		 * generate no more interrupts to prevent handlers from
+		 * accessing released resources.
+		 */
+		//enable_irq(priv->irq);
+
+		dev_err(global_dev, "continuous mode stopped");
+	} else {
+		err = ads1015_set_conv_mode(priv, ADS1015_CONTINUOUS);
+
+		if (err) {
+			dev_err(global_dev, "Can not switch to continious mode");
+			return err;
+		}
+
+	}
+
+	return 0;
+}
+
+
+static const struct iio_trigger_ops ads1015_trigger_ops = {
+	.set_trigger_state = ads1015_set_trigger_state,
+};
+
+static int ads1015_init_managed_trigger(struct device          * parent,
+					struct iio_dev         *indio_dev,
+					struct ads1015_data   *private)
+{
+	struct iio_trigger *trigger;
+	int ret;
+
+	dev_err(parent, "%s(%d) ...\n",__FUNCTION__, __LINE__);
+
+	trigger = devm_iio_trigger_alloc(parent, "%s-dev%d",
+					 indio_dev->name,
+					 iio_device_id(indio_dev));
+	if (!trigger) {
+		dev_err(global_dev, "failed to devm_iio_trigger_alloc");
+		return -ENOMEM;
+	}
+
+	/* Basic setup. */
+	//trigger->ops = &ads1015_trigger_ops;
+
+	private->trigger = trigger;
+
+	/* Register to triggers space. */
+	ret = devm_iio_trigger_register(parent, trigger);
+	if (ret) {
+		dev_err(parent, "failed to register hardware trigger (%d)", ret);
+	}
+
+	return ret;
+}
+#endif
+
+#if ENABLE_IRQ_PIN
 static irqreturn_t ads1015_event_handler(int irq, void *priv)
 {
 	struct iio_dev *indio_dev = priv;
 	struct ads1015_data *data = iio_priv(indio_dev);
 	int val;
 	int ret;
+	//dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	/* Clear the latched ALERT/RDY pin */
 	ret = regmap_read(data->regmap, ADS1015_CONV_REG, &val);
-	if (ret)
+	
+	if (ret) {
+		dev_err(global_dev, "%s(%d) IRQ_HANDLED\n",__FUNCTION__, __LINE__);
 		return IRQ_HANDLED;
+	}
+
+#if 0
+	else {
+		if(last_conv_val!=val) {
+			dev_err(global_dev, "%s(%d) ADS1015_CONV_REG = 0x%X\n",__FUNCTION__, __LINE__, val);
+			last_conv_val = val;
+		}
+	}
+
+	iio_trigger_poll_chained(data->trigger);
+#endif
 
 	if (ads1015_event_channel_enabled(data)) {
 		enum iio_event_direction dir;
 		u64 code;
-
+		dev_err(global_dev, "%s(%d) pushing event ...\n",__FUNCTION__, __LINE__);
+		dev_err(global_dev, "%s(%d) event_channel=%d, val=0x%X\n",__FUNCTION__, __LINE__,data->event_channel, val);
 		dir = data->comp_mode == ADS1015_CFG_COMP_MODE_TRAD ?
 					IIO_EV_DIR_RISING : IIO_EV_DIR_EITHER;
 		code = IIO_UNMOD_EVENT_CODE(IIO_VOLTAGE, data->event_channel,
@@ -781,27 +1005,36 @@ static irqreturn_t ads1015_event_handler(int irq, void *priv)
 
 	return IRQ_HANDLED;
 }
-
+#endif
 static int ads1015_buffer_preenable(struct iio_dev *indio_dev)
 {
 	struct ads1015_data *data = iio_priv(indio_dev);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
 	/* Prevent from enabling both buffer and event at a time */
-	if (ads1015_event_channel_enabled(data))
+	if (ads1015_event_channel_enabled(data)) {
+		dev_err(global_dev, "%s(%d) EBUSY...\n",__FUNCTION__, __LINE__);
 		return -EBUSY;
+	} else {
+		dev_err(global_dev, "%s(%d) Channel(%d) enabled...\n",__FUNCTION__, __LINE__, data->event_channel);
+	}
 
 	return ads1015_set_power_state(iio_priv(indio_dev), true);
 }
 
 static int ads1015_buffer_postdisable(struct iio_dev *indio_dev)
 {
+	
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 	return ads1015_set_power_state(iio_priv(indio_dev), false);
 }
 
 static const struct iio_buffer_setup_ops ads1015_buffer_setup_ops = {
 	.preenable	= ads1015_buffer_preenable,
 	.postdisable	= ads1015_buffer_postdisable,
+	/*
 	.validate_scan_mask = &iio_validate_scan_mask_onehot,
+	*/
 };
 
 static IIO_CONST_ATTR_NAMED(ads1015_scale_available, scale_available,
@@ -900,8 +1133,9 @@ static int ads1015_client_get_channels_config(struct i2c_client *client)
 
 		data->channel_data[channel].pga = pga;
 		data->channel_data[channel].data_rate = data_rate;
-
 		i++;
+
+		//dev_err(dev, "%s(%d)->[%d] Channel(%d) pga=%d, data_rate=%d\n", __FUNCTION__, __LINE__, i, channel, pga, data_rate);
 	}
 
 	return i < 0 ? -EINVAL : 0;
@@ -910,12 +1144,19 @@ static int ads1015_client_get_channels_config(struct i2c_client *client)
 static void ads1015_get_channels_config(struct i2c_client *client)
 {
 	unsigned int k;
+	int ret;
 
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ads1015_data *data = iio_priv(indio_dev);
 
-	if (!ads1015_client_get_channels_config(client))
+	ret = ads1015_client_get_channels_config(client);
+
+	if (!ret) {
+		dev_err(data->dev, "%s(%d) get channel configs success!\n",__FUNCTION__, __LINE__);
 		return;
+	} else {
+		dev_err(data->dev, "%s(%d) error, code: %d, Now fallback on default configuration\n",__FUNCTION__, __LINE__, ret);
+	}
 
 	/* fallback on default configuration */
 	for (k = 0; k < ADS1015_CHANNELS; ++k) {
@@ -924,12 +1165,102 @@ static void ads1015_get_channels_config(struct i2c_client *client)
 	}
 }
 
+#if ENABLE_VDD_CONFIG
+static int ads1015_config_vdd(struct ads1015_data *data)
+
+{
+	int ret = 0;
+	//struct iio_dev *indio_dev = i2c_get_clientdata(client);
+	//struct ads1015_data *data = iio_priv(indio_dev);
+	//struct device *dev = data->dev;
+	dev_err(data->dev, "%s(%d) start!\n",__FUNCTION__, __LINE__);
+
+	data->vdd_reg = devm_regulator_get(data->dev, "ti,vdd");
+	if (IS_ERR(data->vdd_reg)) {
+		ret = PTR_ERR(data->vdd_reg);
+		dev_err(data->dev, "couldn't get vdd_reg regulator, ret:%d\n", ret);
+		data->vdd_reg = NULL;
+		return ret;
+	} else {
+		dev_err(data->dev, "%s(%d) devm_regulator_get success!\n",__FUNCTION__, __LINE__);
+	}
+
+	dev_err(data->dev, "%s(%d) regulator voltage min=%d, max=%d\n",__FUNCTION__, __LINE__, VDD_MIN_uV, VDD_MAX_uV);
+	
+	ret = regulator_set_voltage(data->vdd_reg, VDD_MIN_uV, VDD_MAX_uV);
+	if (ret) {
+		dev_err(data->dev, "%s(%d) regulator_set_voltage faile: %d\n",__FUNCTION__, __LINE__, ret);
+		return ret;
+	}  else {
+		dev_err(data->dev, "%s(%d) regulator_set_voltage success\n",__FUNCTION__, __LINE__, ret);
+	}
+	ret = regulator_set_load(data->vdd_reg, VDD_LOAD_uA); 
+	if (ret) {
+		dev_err(data->dev, "%s(%d) regulator_set_load faile: %d\n",__FUNCTION__, __LINE__, ret);
+		return ret;
+	}  else {
+		dev_err(data->dev, "%s(%d) regulator_set_load success\n",__FUNCTION__, __LINE__, ret);
+	}
+	ret = regulator_enable(data->vdd_reg);
+	if (ret < 0) {
+		dev_err(data->dev, "vdd_reg regulator failed, ret:%d\n", ret);
+		regulator_set_voltage(data->vdd_reg, 0, VDD_LOAD_uV);
+		regulator_set_load(data->vdd_reg, 0);
+		return -EINVAL;
+	} else {
+		dev_err(data->dev, "%s(%d) regulator_enable success!\n",__FUNCTION__, __LINE__);
+	}
+
+	dev_err(data->dev, "%s(%d) success!\n",__FUNCTION__, __LINE__);
+	return 0;
+}
+#endif
+
 static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
 {
 	return regmap_update_bits(data->regmap, ADS1015_CFG_REG,
 				  ADS1015_CFG_MOD_MASK,
 				  mode << ADS1015_CFG_MOD_SHIFT);
 }
+
+#if TEST_KTHREAD
+
+int _task_thread(void *data)
+{
+	struct ads1015_data *pdata = data;
+	int val1, val2 = 0;
+	while (1) {
+		if (kthread_should_stop()) {
+			break;
+		}
+		while(true) {
+			set_current_state(TASK_INTERRUPTIBLE);
+			regmap_read(pdata->regmap, ADS1015_CFG_REG, &val1);
+			regmap_read(pdata->regmap, ADS1015_CONV_REG, &val2);
+			dev_err(global_dev, "%s(%d) ADS1015_CFG_REG=0x%X, ADS1015_CONV_REG=0x%X\n",__FUNCTION__, __LINE__, val1, val2);
+			msleep(1);
+		}
+	}
+	return 0;
+}
+
+struct task_struct *th;
+
+static int thread_init(void *data)
+{
+
+	dev_err(global_dev, "%s(%d) --------------- \n",__FUNCTION__, __LINE__);
+	th = kthread_create(_task_thread, data, "_task_thread");
+
+	if (th) {
+		wake_up_process(th);
+	} else {
+		dev_err(global_dev, "%s(%d) --------------- \n",__FUNCTION__, __LINE__);
+	}
+
+	return 0;
+}
+#endif
 
 static int ads1015_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
@@ -939,13 +1270,23 @@ static int ads1015_probe(struct i2c_client *client,
 	int ret;
 	enum chip_ids chip;
 	int i;
+	unsigned int temp;
+	int val = 0;
+
+	dev_err(&client->dev, "%s(%d) i2c name=%s, addr=%p start!\n",__FUNCTION__, __LINE__, client->name, client->addr);
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(&client->dev, "%s(%d) devm_iio_device_alloc failed!\n",__FUNCTION__, __LINE__);
 		return -ENOMEM;
+	} else {
+		dev_err(&client->dev, "%s(%d) devm_iio_device_alloc success!\n",__FUNCTION__, __LINE__);
+	}
 
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
+
+	data->dev = &client->dev;
 
 	mutex_init(&data->lock);
 
@@ -957,12 +1298,14 @@ static int ads1015_probe(struct i2c_client *client,
 		chip = id->driver_data;
 	switch (chip) {
 	case ADS1015:
+		dev_err(&client->dev, "%s(%d) chip_id ADS1015\n",__FUNCTION__, __LINE__);
 		indio_dev->channels = ads1015_channels;
 		indio_dev->num_channels = ARRAY_SIZE(ads1015_channels);
 		indio_dev->info = &ads1015_info;
 		data->data_rate = (unsigned int *) &ads1015_data_rate;
 		break;
 	case ADS1115:
+		dev_err(&client->dev, "%s(%d) chip_id ADS1115\n",__FUNCTION__, __LINE__);
 		indio_dev->channels = ads1115_channels;
 		indio_dev->num_channels = ARRAY_SIZE(ads1115_channels);
 		indio_dev->info = &ads1115_info;
@@ -983,7 +1326,19 @@ static int ads1015_probe(struct i2c_client *client,
 
 		data->thresh_data[i].low_thresh = -1 << (realbits - 1);
 		data->thresh_data[i].high_thresh = (1 << (realbits - 1)) - 1;
+
+		//dev_err(&client->dev, "%s(%d) thresh[%d] low: %d / high: %d\n",__FUNCTION__, __LINE__, i, data->thresh_data[i].low_thresh,data->thresh_data[i].high_thresh);
 	}
+
+#if ENABLE_VDD_CONFIG
+	//dev_err(&client->dev, "%s(%d)  %d, %d\n",__FUNCTION__, __LINE__, client->dev.power.runtime_error, client->dev.power.disable_depth);
+
+	ret = ads1015_config_vdd(data);
+	if (ret < 0) {
+		dev_err(&client->dev, "%s(%d) error when config vdd, code: %d\n",__FUNCTION__, __LINE__, ret);
+		return ret;
+	}
+#endif
 
 	/* we need to keep this ABI the same as used by hwmon ADS1015 driver */
 	ads1015_get_channels_config(client);
@@ -992,15 +1347,31 @@ static int ads1015_probe(struct i2c_client *client,
 	if (IS_ERR(data->regmap)) {
 		dev_err(&client->dev, "Failed to allocate register map\n");
 		return PTR_ERR(data->regmap);
+	} else {
+		dev_err(&client->dev, "%s(%d)  init i2c regmap success!\n",__FUNCTION__, __LINE__);
+		regmap_read(data->regmap, ADS1015_CFG_REG, &val);
+		dev_err(&client->dev, "%s(%d) CFG_REG = 0x%X \n", __FUNCTION__, __LINE__, val);
+		regmap_read(data->regmap, ADS1015_LO_THRESH_REG, &val);
+		dev_err(&client->dev, "%s(%d) LO_THRESH_REG = 0x%X \n", __FUNCTION__, __LINE__, val);
+		regmap_read(data->regmap, ADS1015_HI_THRESH_REG, &val);
+		dev_err(&client->dev, "%s(%d) HI_THRESH_REG = 0x%X \n", __FUNCTION__, __LINE__, val);
 	}
 
 	ret = devm_iio_triggered_buffer_setup(&client->dev, indio_dev, NULL,
 					      ads1015_trigger_handler,
 					      &ads1015_buffer_setup_ops);
 	if (ret < 0) {
-		dev_err(&client->dev, "iio triggered buffer setup failed\n");
+		dev_err(&client->dev, "%s(%d) iio triggered buffer setup failed, error: \n",__FUNCTION__, __LINE__, ret);
 		return ret;
+	} else {
+		dev_err(&client->dev, "%s(%d) iio triggered buffer setup success\n",__FUNCTION__, __LINE__);
 	}
+	//ads1015_init_managed_trigger(&client->dev, indio_dev, data);
+
+#if ENABLE_IRQ_PIN
+	ret = regmap_write(data->regmap, ADS1015_LO_THRESH_REG, 0x4000);
+	ret = regmap_write(data->regmap, ADS1015_HI_THRESH_REG, 0x800F);
+	data->irq = 0;
 
 	if (client->irq) {
 		unsigned long irq_trig =
@@ -1008,53 +1379,111 @@ static int ads1015_probe(struct i2c_client *client,
 		unsigned int cfg_comp_mask = ADS1015_CFG_COMP_QUE_MASK |
 			ADS1015_CFG_COMP_LAT_MASK | ADS1015_CFG_COMP_POL_MASK;
 		unsigned int cfg_comp =
-			ADS1015_CFG_COMP_DISABLE << ADS1015_CFG_COMP_QUE_SHIFT |
-			1 << ADS1015_CFG_COMP_LAT_SHIFT;
+			ADS1015_CFG_COMP_ASSERT_MODE << ADS1015_CFG_COMP_QUE_SHIFT | 0 << ADS1015_CFG_COMP_LAT_SHIFT;
+		dev_err(&client->dev, "%s(%d) start config client, init_irq=%d, irq=%d, CFG_COMP_QUE_MASK=0x%X \n",__FUNCTION__, __LINE__, client->init_irq, client->irq, ADS1015_CFG_COMP_QUE_MASK);
+		data->irq = client->irq;
 
 		switch (irq_trig) {
 		case IRQF_TRIGGER_LOW:
-			cfg_comp |= ADS1015_CFG_COMP_POL_LOW <<
-					ADS1015_CFG_COMP_POL_SHIFT;
+			dev_err(&client->dev, "%s(%d) i2c IRQF_TRIGGER_LOW\n",__FUNCTION__, __LINE__);
+			cfg_comp |= ADS1015_CFG_COMP_POL_LOW << ADS1015_CFG_COMP_POL_SHIFT;
 			break;
 		case IRQF_TRIGGER_HIGH:
-			cfg_comp |= ADS1015_CFG_COMP_POL_HIGH <<
-					ADS1015_CFG_COMP_POL_SHIFT;
+			dev_err(&client->dev, "%s(%d) i2c IRQF_TRIGGER_HIGH\n",__FUNCTION__, __LINE__);
+			cfg_comp |= ADS1015_CFG_COMP_POL_HIGH << ADS1015_CFG_COMP_POL_SHIFT;
 			break;
 		default:
+			dev_err(&client->dev, "%s(%d) i2c IRQF_TRIGGER error: invalide irq trigger type %d\n",__FUNCTION__, __LINE__, irq_trig);
 			return -EINVAL;
 		}
 
-		ret = regmap_update_bits(data->regmap, ADS1015_CFG_REG,
-					cfg_comp_mask, cfg_comp);
-		if (ret)
-			return ret;
+		//cfg_comp |= 6 << ADS1015_CFG_MUX_SHIFT | 1 << ADS1015_CFG_PGA_SHIFT | 6 << ADS1015_CFG_DR_SHIFT;
+		dev_err(&client->dev, "%s(%d) regmap_update_bits: ADS1015_CFG_REG: mask=0x%X, cfg=0x%X \n",__FUNCTION__, __LINE__, cfg_comp_mask, cfg_comp);
 
-		ret = devm_request_threaded_irq(&client->dev, client->irq,
-						NULL, ads1015_event_handler,
-						irq_trig | IRQF_ONESHOT,
-						client->name, indio_dev);
-		if (ret)
+		ret = regmap_update_bits(data->regmap, ADS1015_CFG_REG, cfg_comp_mask, cfg_comp);
+		if (ret) {
+			dev_err(&client->dev, "%s(%d) regmap_update_bits failed, code: %d\n",__FUNCTION__, __LINE__,ret);
 			return ret;
+ 		} else {
+			regmap_read(data->regmap, ADS1015_CFG_REG, &val);
+			dev_err(&client->dev, "%s(%d) get reg result, ADS1015_CFG_REG value=0x%X\n",__FUNCTION__, __LINE__, val);
+			regmap_read(data->regmap, ADS1015_LO_THRESH_REG, &val);
+			dev_err(&client->dev, "%s(%d) get reg result, ADS1015_LO_THRESH_REG=0x%X\n",__FUNCTION__, __LINE__, val);
+			regmap_read(data->regmap, ADS1015_HI_THRESH_REG, &val);
+			dev_err(&client->dev, "%s(%d) get reg result, ADS1015_HI_THRESH_REG=0x%X\n",__FUNCTION__, __LINE__, val);
+		}
+
+		/* Request handler to be scheduled into threaded interrupt context. */
+		ret = devm_request_threaded_irq(&client->dev, client->irq, NULL, ads1015_event_handler, irq_trig | IRQF_ONESHOT, client->name, indio_dev);
+		if (ret) {
+			dev_err(&client->dev, "%s(%d) devm_request_threaded_irq failed, code: %d\n",__FUNCTION__, __LINE__,ret);
+			return ret;
+		} else {
+			dev_err(&client->dev, "%s(%d) devm_request_threaded_irq success\n",__FUNCTION__, __LINE__);
+		}
+
+	} else {
+		dev_err(&client->dev, "%s(%d) IRQ not applied, Ignore it\n",__FUNCTION__, __LINE__);
+	}
+#endif
+	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
+	if (ret) {
+		dev_err(&client->dev, "%s(%d) ads1015_set_conv_mode failed, code: %d\n",__FUNCTION__, __LINE__,ret);
+		return ret;
+	} else {
+		dev_err(&client->dev, "%s(%d) ads1015_set_conv_mode %d\n",__FUNCTION__, __LINE__, ADS1015_CONTINUOUS);
 	}
 
-	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
-	if (ret)
-		return ret;
+	ret = regmap_read(data->regmap, ADS1015_CFG_REG, &temp);
+	if(ret) {
+		dev_err(&client->dev, "%s(%d) read cfg reg failed, error %d\n",__FUNCTION__, __LINE__, ret);
+	} else {
+		dev_err(&client->dev, "%s(%d) cfg reg value = 0x%X\n",__FUNCTION__, __LINE__, temp);
+	}
 
 	data->conv_invalid = true;
 
 	ret = pm_runtime_set_active(&client->dev);
-	if (ret)
+	if (ret) {
+		dev_err(&client->dev, "%s(%d) pm_runtime_set_active failed, code: %d\n",__FUNCTION__, __LINE__,ret);
 		return ret;
+	} else {
+		dev_err(&client->dev, "%s(%d) pm_runtime_set_active OK \n",__FUNCTION__, __LINE__);
+	}
+
+#if 0
 	pm_runtime_set_autosuspend_delay(&client->dev, ADS1015_SLEEP_DELAY_MS);
+	dev_err(&client->dev, "%s(%d) pm_runtime_set_autosuspend_delay to %dms!\n",__FUNCTION__, __LINE__,ADS1015_SLEEP_DELAY_MS);
+
 	pm_runtime_use_autosuspend(&client->dev);
+	dev_err(&client->dev, "%s(%d) pm_runtime_use_autosuspend \n",__FUNCTION__, __LINE__);
+#endif
+
 	pm_runtime_enable(&client->dev);
+	dev_err(&client->dev, "%s(%d) pm_runtime_enable done\n",__FUNCTION__, __LINE__);
 
 	ret = iio_device_register(indio_dev);
 	if (ret < 0) {
-		dev_err(&client->dev, "Failed to register IIO device\n");
+		dev_err(&client->dev, "%s(%d) iio_device_register failed, code: %d\n",__FUNCTION__, __LINE__,ret);
 		return ret;
+	} else {
+		dev_err(&client->dev, "%s(%d) indio_dev:->active_scan_mask=%ld, scan_timestamp=%d, scan_bytes=0x%X, currentmode=%d\n",
+			__FUNCTION__, __LINE__, 
+			indio_dev->trig,
+			indio_dev->active_scan_mask,
+			indio_dev->scan_timestamp,
+			indio_dev->scan_bytes,
+			indio_dev->currentmode);
+		dev_err(&client->dev, "%s(%d)indio_dev->trig=%p\n",__FUNCTION__, __LINE__, indio_dev->trig);
 	}
+
+	dev_err(&client->dev, "%s(%d) success........!\n",__FUNCTION__, __LINE__);
+
+#if TEST_KTHREAD
+	thread_init(data);
+#endif
+
+	global_dev = &client->dev;
 
 	return 0;
 }
@@ -1064,35 +1493,57 @@ static int ads1015_remove(struct i2c_client *client)
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ads1015_data *data = iio_priv(indio_dev);
 
-	iio_device_unregister(indio_dev);
+	dev_err(global_dev, "%s(%d) ...\n",__FUNCTION__, __LINE__);
 
+	iio_device_unregister(indio_dev);
+#if 1
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
-
+#endif
+	
+#if 0
 	/* power down single shot mode */
 	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+#else
+	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+	return regulator_disable(data->vdd_reg);
+#endif
 }
 
 #ifdef CONFIG_PM
 static int ads1015_runtime_suspend(struct device *dev)
 {
+#if 1
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
+	//dev_err(global_dev, "%s(%d) suspend...\n",__FUNCTION__, __LINE__);
 
 	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+#else
+	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
+	return 0;
+#endif
 }
 
 static int ads1015_runtime_resume(struct device *dev)
 {
+#if 1
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
 	int ret;
 
+	//dev_err(global_dev, "%s(%d) resume...\n",__FUNCTION__, __LINE__);
 	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
-	if (!ret)
+	if (!ret) {
 		data->conv_invalid = true;
+	}
 
 	return ret;
+#else
+	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
+	return 0;
+
+#endif
 }
 #endif
 
@@ -1110,7 +1561,7 @@ MODULE_DEVICE_TABLE(i2c, ads1015_id);
 
 static const struct of_device_id ads1015_of_match[] = {
 	{
-		.compatible = "ti,ads1015",
+		.compatible = "aks,ti-ads1015",
 		.data = (void *)ADS1015
 	},
 	{
