@@ -1,4 +1,4 @@
-# Android makefile for BT kernel modules
+# Android makefile for AKS Joystick kernel modules
 
 LOCAL_PATH := $(call my-dir)
 
