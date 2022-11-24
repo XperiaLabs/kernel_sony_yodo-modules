@@ -1,8 +1,6 @@
 AKS_JS_DLKM_ENABLE := true
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
-	ifeq ($(TARGET_KERNEL_DLKM_TOUCH_OVERRIDE), false)
-		AKS_JS_DLKM_ENABLE := false
-	endif
+	AKS_JS_DLKM_ENABLE := false
 endif
 
 ifeq ($(AKS_JS_DLKM_ENABLE),  true)
