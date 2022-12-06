@@ -2,13 +2,13 @@ package vendor.aks.gamepad@1.0;
 
 interface IGamepad {
     initial(string name) generates (string result);
-	
+
     /**
      * By calling this interface, you can get the gamepad service client instance in the HAL
      * @param retry indicates whether to continue trying to start the service when the server does not exist
      * @return IGamepad
      */
-    IGamepad getGamepadService(boolean retry);
+    /* IGamepad getGamepadService(boolean retry); */
 
     /**
      * Enable/wake up the gamepad device, due to the automatic sleep mechanism in the driver,
@@ -21,7 +21,7 @@ interface IGamepad {
      * the interface will be subsequently evaluated according to the actual situation whether it is reserved
      */
     disableGamepad() generates (int32_t result);
-    
+
     /**
      * Call this interface to set Working mode
      * @param mode indicates the working mode to be set, 1 means Multi-touch mode, 2 means game-controller mode
@@ -178,7 +178,7 @@ interface IGamepad {
      * @param macroTimingByteString String should be used after switching to Byte array information,
      *                              and it has one time information per 2 bytes.
      *                              Here, we usually provide 20 times of time information fixedly,
-     *                              and it is determined that it does not work if 0 appears even 
+     *                              and it is determined that it does not work if 0 appears even
      *                              though it is not the first time information.
      *                              Each timing has a gap of 15 ms per unit.
      *                              Therefore, the timing should be adjusted while maintaining this gap.
@@ -200,7 +200,7 @@ interface IGamepad {
      * The principle of operation itself is the same as launchMacro, but it must work when the button on the game pad is pressed.
      * The button set as a macro does not work even if you press it again until the macro function ends as soon as it is triggered.
      * Repeat the same macro if the button is pressed continuously.
-     * 
+     *
      *     buttonIndex |       0, 1, 2, 3, 4,  5,  6,  7,  8,         9,         10,      11,        12, 13, 14,    15,     16
      *     button      | (blank), A, B, X, Y, LB, RB, LT, RT, DPAD_LEFT, DPAD_RIGHT, DPAD_UP, DPAD_DOWN, L3, R3, Start, Select
      */
@@ -210,9 +210,9 @@ interface IGamepad {
      * Loads all macro data specified in the button.
      * The data received in the setChangeToMacro function is divided into commas and submitted.
      * If there are multiple received macros, it is provided by changing the line.
-     * 
+     *
      * (buttonIndex),(macroTimingByteString),(macroButtonByteString)
-     * 
+     *
      * example)
      * 01,000100060009000a00230024002c002d003300340039003a00440045004d004f0050005700580059,00010000000100000001000000010000000200000002000000020000000000020000000000020000
      * 02,000100060009000a00230024002c002d003300340039003a00440045004d004f0050005700580059,00010000000100000001000000010000000200000002000000020000000000020000000000020000
