@@ -87,8 +87,8 @@
 #define ADS1015_CONTINUOUS	0
 #define ADS1015_SINGLESHOT	1
 
-#define ADS1015_SLEEP_DELAY_MS		2000
-#define ADS1015_DEFAULT_PGA		2
+#define ADS1015_SLEEP_DELAY_MS		5000
+#define ADS1015_DEFAULT_PGA			2
 #define ADS1015_DEFAULT_DATA_RATE	4
 #define ADS1015_DEFAULT_CHAN		0
 
@@ -379,49 +379,48 @@ static int ads1015_set_power_state(struct ads1015_data *data, bool on)
 static
 int ads1015_get_adc_result(struct ads1015_data *data, int chan, int *val)
 {
-	int ret, pga, dr, dr_old, conv_time;
+	int ret, pga, dr;
+		//, dr_old, conv_time;
 	unsigned int old, mask, cfg;
 	if (chan < 0 || chan >= ADS1015_CHANNELS) {
-		dev_err(global_dev, "%s(%d) error: -22\n",__FUNCTION__, __LINE__);
 		return -EINVAL;
 	}
 
 	ret = regmap_read(data->regmap, ADS1015_CFG_REG, &old);
 	if (ret) {
-		dev_err(global_dev, "%s(%d) regmap_read ads1015 config error: %d\n",__FUNCTION__, __LINE__, ret);
 		return ret;
 	}
 
 	pga = data->channel_data[chan].pga;
 	dr = data->channel_data[chan].data_rate;
-	mask = ADS1015_CFG_MUX_MASK | ADS1015_CFG_PGA_MASK |
-		ADS1015_CFG_DR_MASK;
-	cfg = chan << ADS1015_CFG_MUX_SHIFT | pga << ADS1015_CFG_PGA_SHIFT |
-		dr << ADS1015_CFG_DR_SHIFT;
-
+	mask = ADS1015_CFG_MUX_MASK | ADS1015_CFG_PGA_MASK | ADS1015_CFG_DR_MASK;
+	cfg = chan << ADS1015_CFG_MUX_SHIFT | pga << ADS1015_CFG_PGA_SHIFT | dr << ADS1015_CFG_DR_SHIFT;
+#if 0
 	if (ads1015_event_channel_enabled(data)) {
+		dev_err(global_dev, "%s(%d)\n",__FUNCTION__, __LINE__);
 		mask |= ADS1015_CFG_COMP_QUE_MASK | ADS1015_CFG_COMP_MODE_MASK;
-		cfg |= data->thresh_data[chan].comp_queue <<
-				ADS1015_CFG_COMP_QUE_SHIFT |
-			data->comp_mode <<
-				ADS1015_CFG_COMP_MODE_SHIFT;
+		cfg |= data->thresh_data[chan].comp_queue << ADS1015_CFG_COMP_QUE_SHIFT | data->comp_mode << ADS1015_CFG_COMP_MODE_SHIFT;
 	}
-
+#endif
 	cfg = (old & ~mask) | (cfg & mask);
 	if (old != cfg) {
 		ret = regmap_write(data->regmap, ADS1015_CFG_REG, cfg);
 		if (ret) {
-			dev_err(global_dev, "%s(%d) regmap_write ads1015 config error: %d\n",__FUNCTION__, __LINE__, ret);
 			return ret;
 		}
 		data->conv_invalid = true;
 	}
+
 	if (data->conv_invalid) {
+		#if 0
 		dr_old = (old & ADS1015_CFG_DR_MASK) >> ADS1015_CFG_DR_SHIFT;
 		conv_time = DIV_ROUND_UP(USEC_PER_SEC, data->data_rate[dr_old]);
 		conv_time += DIV_ROUND_UP(USEC_PER_SEC, data->data_rate[dr]);
 		conv_time += conv_time / 10; /* 10% internal clock inaccuracy */
-		usleep_range(conv_time, conv_time + 1);
+		dev_err(global_dev, "%s(%d) conv_time = %d\n",__FUNCTION__, __LINE__, conv_time);
+		#endif
+		usleep_range(1375, 1376);
+		//msleep(10);
 		data->conv_invalid = false;
 	}
 
@@ -548,6 +547,16 @@ static int ads1015_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW: {
+		#if 1
+		int shift = chan->scan_type.shift;
+		ret = ads1015_get_adc_result(data, chan->address, val);
+		//ret = regmap_read(data->regmap, ADS1015_CONV_REG, val);
+		if (ret < 0) {
+			dev_err(global_dev, "%s(%d) error: %d\n",__FUNCTION__, __LINE__, ret);
+		}
+		*val = sign_extend32(*val >> shift, 15 - shift);
+		ret = IIO_VAL_INT;
+		#else
 		int shift = chan->scan_type.shift;
 
 		ret = iio_device_claim_direct_mode(indio_dev);
@@ -588,6 +597,7 @@ static int ads1015_read_raw(struct iio_dev *indio_dev,
 		ret = IIO_VAL_INT;
 release_direct:
 		iio_device_release_direct_mode(indio_dev);
+		#endif
 		break;
 	}
 	case IIO_CHAN_INFO_SCALE:
@@ -1214,6 +1224,7 @@ static int ads1015_config_vdd(struct ads1015_data *data)
 	dev_err(data->dev, "%s(%d) success!\n",__FUNCTION__, __LINE__);
 	return 0;
 }
+
 #endif
 
 static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
@@ -1451,7 +1462,7 @@ static int ads1015_probe(struct i2c_client *client,
 		dev_err(&client->dev, "%s(%d) pm_runtime_set_active OK \n",__FUNCTION__, __LINE__);
 	}
 
-#if 0
+#if 1
 	pm_runtime_set_autosuspend_delay(&client->dev, ADS1015_SLEEP_DELAY_MS);
 	dev_err(&client->dev, "%s(%d) pm_runtime_set_autosuspend_delay to %dms!\n",__FUNCTION__, __LINE__,ADS1015_SLEEP_DELAY_MS);
 
@@ -1518,7 +1529,10 @@ static int ads1015_runtime_suspend(struct device *dev)
 	struct ads1015_data *data = iio_priv(indio_dev);
 	//dev_err(global_dev, "%s(%d) suspend...\n",__FUNCTION__, __LINE__);
 
-	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
+	
+	dev_err(global_dev, "%s(%d) disable vdd...\n",__FUNCTION__, __LINE__);
+	return regulator_disable(data->vdd_reg);
 #else
 	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
 	return 0;
@@ -1531,8 +1545,13 @@ static int ads1015_runtime_resume(struct device *dev)
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
 	int ret;
+	
+	dev_err(global_dev, "%s(%d) enable vdd...\n",__FUNCTION__, __LINE__);
+	ret = regulator_enable(data->vdd_reg);
+	if (!ret) {
+	dev_err(global_dev, "%s(%d) can not enable vdd...\n",__FUNCTION__, __LINE__);
+	}
 
-	//dev_err(global_dev, "%s(%d) resume...\n",__FUNCTION__, __LINE__);
 	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
 	if (!ret) {
 		data->conv_invalid = true;
