@@ -87,8 +87,8 @@
 #define ADS1015_CONTINUOUS	0
 #define ADS1015_SINGLESHOT	1
 
-#define ADS1015_SLEEP_DELAY_MS		5000
-#define ADS1015_DEFAULT_PGA			2
+#define ADS1015_SLEEP_DELAY_MS		2000
+#define ADS1015_DEFAULT_PGA		2
 #define ADS1015_DEFAULT_DATA_RATE	4
 #define ADS1015_DEFAULT_CHAN		0
 
@@ -1224,7 +1224,6 @@ static int ads1015_config_vdd(struct ads1015_data *data)
 	dev_err(data->dev, "%s(%d) success!\n",__FUNCTION__, __LINE__);
 	return 0;
 }
-
 #endif
 
 static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
@@ -1462,7 +1461,7 @@ static int ads1015_probe(struct i2c_client *client,
 		dev_err(&client->dev, "%s(%d) pm_runtime_set_active OK \n",__FUNCTION__, __LINE__);
 	}
 
-#if 1
+#if 0
 	pm_runtime_set_autosuspend_delay(&client->dev, ADS1015_SLEEP_DELAY_MS);
 	dev_err(&client->dev, "%s(%d) pm_runtime_set_autosuspend_delay to %dms!\n",__FUNCTION__, __LINE__,ADS1015_SLEEP_DELAY_MS);
 
@@ -1529,10 +1528,7 @@ static int ads1015_runtime_suspend(struct device *dev)
 	struct ads1015_data *data = iio_priv(indio_dev);
 	//dev_err(global_dev, "%s(%d) suspend...\n",__FUNCTION__, __LINE__);
 
-	ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
-	
-	dev_err(global_dev, "%s(%d) disable vdd...\n",__FUNCTION__, __LINE__);
-	return regulator_disable(data->vdd_reg);
+	return ads1015_set_conv_mode(data, ADS1015_SINGLESHOT);
 #else
 	dev_err(global_dev, "%s(%d) but do nothing...\n",__FUNCTION__, __LINE__);
 	return 0;
@@ -1545,13 +1541,8 @@ static int ads1015_runtime_resume(struct device *dev)
 	struct iio_dev *indio_dev = i2c_get_clientdata(to_i2c_client(dev));
 	struct ads1015_data *data = iio_priv(indio_dev);
 	int ret;
-	
-	dev_err(global_dev, "%s(%d) enable vdd...\n",__FUNCTION__, __LINE__);
-	ret = regulator_enable(data->vdd_reg);
-	if (!ret) {
-	dev_err(global_dev, "%s(%d) can not enable vdd...\n",__FUNCTION__, __LINE__);
-	}
 
+	//dev_err(global_dev, "%s(%d) resume...\n",__FUNCTION__, __LINE__);
 	ret = ads1015_set_conv_mode(data, ADS1015_CONTINUOUS);
 	if (!ret) {
 		data->conv_invalid = true;
