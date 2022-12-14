@@ -1,4 +1,6 @@
 service vendor.aks.gamepad /vendor/bin/hw/vendor.aks.gamepad@1.0-service
     class hal
+    oneshot
+    disabled
     user system
-    group system
+    group system input
