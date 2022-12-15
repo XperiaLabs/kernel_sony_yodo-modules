@@ -306,33 +306,26 @@ static void aks_gamepad_gpio_keys_gpio_report_event(struct aks_gpio_button_data 
 					input_sync(input);
 					break;
 				default:
-					input_event(input, type, *bdata->code, state);
 					break;
 			}
 		}else {
 		switch(button->code) {
 				case BTN_DPAD_UP:
-					input_report_abs(input, ABS_HAT0Y, 50);
-					input_sync(input);
-					break;
 				case BTN_DPAD_DOWN:
 					input_report_abs(input, ABS_HAT0Y, 50);
 					input_sync(input);
 					break;
 				case BTN_DPAD_LEFT:
-					input_report_abs(input, ABS_HAT0X, 50);
-					input_sync(input);
-					break;
 				case BTN_DPAD_RIGHT:
 					input_report_abs(input, ABS_HAT0X, 50);
 					input_sync(input);
 					break;
 				default:
-					input_event(input, type, *bdata->code, state);
 					break;
 			}
 
 		}
+		input_event(input, type, *bdata->code, state);
 	}
 }
 
@@ -1133,8 +1126,8 @@ static int aks_gamepad_analog_setup_extra(struct aks_analog_key_data *adata) {
 	}
 
 	//simulate DPAD to analog data, Only -1, 0, and 1
-	input_set_abs_params(adata->input, ABS_HAT0X,1, 99, 3, 3);
-	input_set_abs_params(adata->input, ABS_HAT0Y,1, 99, 3, 3);
+	input_set_abs_params(adata->input, ABS_HAT0X, 1, 99, 3, 3);
+	input_set_abs_params(adata->input, ABS_HAT0Y, 99, 1, 3, 3);
 	return 0;
 }
 
@@ -1431,7 +1424,6 @@ static int aks_gamepad_config_input_dev(struct platform_device *pdev) {
 		dev_err(dev, "failed to allocate input device\n");
 		return -ENOMEM;
 	}
-
 	
 	input_set_drvdata(input, aks_dev);
 
@@ -1467,12 +1459,12 @@ static int aks_gamepad_config_input_dev(struct platform_device *pdev) {
 	}
 
 	error = input_register_device(input);
-	//update_thread_init(aks_dev);
-
 	if (error) {
 		dev_err(dev, "Unable to register input device, error: %d\n", error);
 		return error;
 	}
+
+	//update_thread_init(aks_dev);
 
 	return 0;
 
@@ -1694,8 +1686,10 @@ static int aks_gamepad_cdev_init_ioctl() {
 static int aks_gamepad_probe(struct platform_device *pdev)
 {
     struct device *dev = &pdev->dev;
+	int error = 0;
 
     g_aks_dev = devm_kzalloc(dev, sizeof(*g_aks_dev), GFP_KERNEL);
+	g_aks_dev->dev = dev;
     if (!g_aks_dev) {
         dev_err(dev, "%s(%d) failed allocate aks input dev!\n",__FUNCTION__, __LINE__);
         return -ENOMEM;
@@ -1707,11 +1701,19 @@ static int aks_gamepad_probe(struct platform_device *pdev)
 	g_aks_dev->work_mode = CURRENT_WORK_MODE;
 	dev_set_drvdata(dev, g_aks_dev);
 	platform_set_drvdata(pdev, g_aks_dev);
+	error = aks_gamepad_config_input_dev(pdev);
 
-	aks_gamepad_config_input_dev(pdev);
+	if(error) {
+		dev_err(g_aks_dev->dev, "---> %s(%d) error %d\n",__FUNCTION__, __LINE__, error);
+		return error;
+	}
 
-	aks_gamepad_cdev_init_ioctl();
-	
+	error = aks_gamepad_cdev_init_ioctl();
+	if(error) {
+		dev_err(g_aks_dev->dev, "---> %s(%d) error %d\n",__FUNCTION__, __LINE__, error);
+		return error;
+	}
+
     return 0;
 }
 
@@ -1724,7 +1726,7 @@ static int aks_gamepad_remove(struct platform_device *pdev)
 
 	cdev_del(&aks_cdev);
  	kfree(aks_cdev_data_p);
-  	unregister_chrdev_region(MKDEV(aks_cdev_major, 0), 2); /*释放设备号*/
+  	unregister_chrdev_region(MKDEV(aks_cdev_major, 0), 2);
 
     return 0;
 }
