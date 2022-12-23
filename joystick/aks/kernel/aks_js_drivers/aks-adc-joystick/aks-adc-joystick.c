@@ -53,7 +53,7 @@
 #define AKS_GAMEPAD_ANALOG_POLL_INTERVAL (10)
 
 #define AKS_GAMEPAD_ENLARGE_SHIFT 		(16)
-#define AKS_GAMEPAD_DRAG_SPEED_SHIFT	(4)
+#define AKS_GAMEPAD_DRAG_SPEED_SHIFT	(3)
 #define AKS_GAMEPAD_MT_MAX_HEIGHT	 (1201)
 #define AKS_GAMEPAD_MT_MAX_WIDTH	 (1201)
 
@@ -558,23 +558,6 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 
 				if(mapping_props->ls_type == 2) {
 					record->last_x = val;
-					if(js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
-						if(record->ls_touching == 0) {
-							record->ls_touching = 1;
-						}
-						ls_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
-						record->last_touch_x = calculate_drag_position(false, val, axis->cali.physic_zero_pos,\
-							record->last_touch_x, center_x, mapping_props->ls_size, ratio, adev, ABS_X, reset_drag_touch_postion);
-					} else {
-						if(record->ls_touching == 1) {
-							record->ls_touching = 0;
-							record->last_touch_x = mapping_props->ls.x;
-							record->last_touch_y = mapping_props->ls.y;
-						}
-						ls_state = 0;
-					}
-				} else if (mapping_props->ls_type == 0) {
 					if(mapping_props->l_bind_key[0] != 0) {
 						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
 						if(act_bind_ls) {
@@ -598,24 +581,66 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 						}
 					}
 
-					if(moved(record->last_x, val)) {
-						record->last_x = val;
-						if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
-							if(record->ls_touching == 0) {
-								record->ls_touching = 1;
-							}
-							ls_state = 1;
-							ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
-							record->last_touch_x = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_x, move_limits[mapping_props->ls_size].half_w);
-						} else {
-							if(record->ls_touching == 1) {
-								record->ls_touching = 0;
-								record->last_touch_x = mapping_props->ls.x;
-								record->last_touch_y = mapping_props->ls.y;
-							}
-							ls_state = 0;
+					if(record->last_binding_ls || js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
+						if(record->ls_touching == 0) {
+							record->ls_touching = 1;
 						}
-						aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
+						ls_state = 1;
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_x = calculate_drag_position(false, val, axis->cali.physic_zero_pos,\
+							record->last_touch_x, center_x, mapping_props->ls_size, ratio, adev, ABS_X, reset_drag_touch_postion);
+					} else {
+						if(record->ls_touching == 1) {
+							record->ls_touching = 0;
+							record->last_touch_x = mapping_props->ls.x;
+							record->last_touch_y = mapping_props->ls.y;
+						}
+						ls_state = 0;
+					}
+				} else if(mapping_props->ls_type == 0) {
+					if (mapping_props->ls_type == 0) {
+						if(mapping_props->l_bind_key[0] != 0) {
+							act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+							if(act_bind_ls) {
+								if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+									id_l = coord_ls.id;
+									center_x = coord_ls.x;
+									if(!record->last_binding_ls) {
+										aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+										record->last_touch_x = coord_ls.x;
+										record->last_touch_y = coord_ls.y;
+										record->last_binding_ls = true;
+									}
+								}
+							} else {
+								if(record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+									record->last_touch_x = mapping_props->ls.x;
+									record->last_touch_y = mapping_props->ls.y;
+									record->last_binding_ls = false;
+								}
+							}
+						}
+
+						if(moved(record->last_x, val)) {
+							record->last_x = val;
+							if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+								if(record->ls_touching == 0) {
+									record->ls_touching = 1;
+								}
+								ls_state = 1;
+								ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+								record->last_touch_x = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_x, move_limits[mapping_props->ls_size].half_w);
+							} else {
+								if(record->ls_touching == 1) {
+									record->ls_touching = 0;
+									record->last_touch_x = mapping_props->ls.x;
+									record->last_touch_y = mapping_props->ls.y;
+								}
+								ls_state = 0;
+							}
+							aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
+						}
 					}
 				}
 				break;
@@ -627,7 +652,30 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 
 				if(mapping_props->ls_type == 2) {
 					record->last_y = val;
-					if(js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
+					if(mapping_props->l_bind_key[0] != 0) {
+						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_ls) {
+							if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+								id_l = coord_ls.id;
+								center_y = coord_ls.y;
+								if(!record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+									record->last_touch_x = coord_ls.x;
+									record->last_touch_y = coord_ls.y;
+									record->last_binding_ls = true;
+								}
+							}
+						} else {
+							if(record->last_binding_ls) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								record->last_binding_ls = false;
+							}
+						}
+					}
+
+					if(record->last_binding_ls || js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
 						if(record->ls_touching == 0) {
 							record->ls_touching = 1;
 						}
@@ -643,49 +691,50 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 						}
 						ls_state = 0;
 					}
-				} else if(mapping_props->l_bind_key[0] != 0) {
-					act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
-					if(act_bind_ls) {
-						if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
-							id_l = coord_ls.id;
-							center_y = coord_ls.y;
-							if(!record->last_binding_ls) {
-								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
-								record->last_touch_x = coord_ls.x;
-								record->last_touch_y = coord_ls.y;
-								record->last_binding_ls = true;
+				} else if(mapping_props->ls_type == 0) {
+					if(mapping_props->l_bind_key[0] != 0) {
+						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_ls) {
+							if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+								id_l = coord_ls.id;
+								center_y = coord_ls.y;
+								if(!record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+									record->last_touch_x = coord_ls.x;
+									record->last_touch_y = coord_ls.y;
+									record->last_binding_ls = true;
+								}
+							}
+						} else {
+							if(record->last_binding_ls) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								record->last_binding_ls = false;
 							}
 						}
-					} else {
-						if(record->last_binding_ls) {
-							aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
-							record->last_touch_x = mapping_props->ls.x;
-							record->last_touch_y = mapping_props->ls.y;
-							record->last_binding_ls = false;
-						}
 					}
-				}
-
-				if(moved(record->last_y, val)) {
-					record->last_y = val;
-					if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
-						if(record->ls_touching == 0) {
-							record->ls_touching = 1;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
+					if(moved(record->last_y, val)) {
+						record->last_y = val;
+						if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+							if(record->ls_touching == 0) {
+								record->ls_touching = 1;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
+							}
+							ls_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : (axis->cali.enlarge_ratio_min);
+							record->last_touch_y = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_y, move_limits[mapping_props->ls_size].half_h);
+						} else {
+							if(record->ls_touching == 1) {
+								record->ls_touching = 0;
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
+							}
+							ls_state = 0;
 						}
-						ls_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : (axis->cali.enlarge_ratio_min);
-						record->last_touch_y = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_y, move_limits[mapping_props->ls_size].half_h);
-					} else {
-						if(record->ls_touching == 1) {
-							record->ls_touching = 0;
-							record->last_touch_x = mapping_props->ls.x;
-							record->last_touch_y = mapping_props->ls.y;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
-						}
-						ls_state = 0;
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
 				}
 
 				break;
@@ -699,23 +748,6 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 
 				if(mapping_props->rs_type == 2) {
 					record->last_z = val;
-					if(js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
-						if(record->rs_touching == 0) {
-							record->rs_touching = 1;
-						}
-						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
-						record->last_touch_z = calculate_drag_position(true, val, axis->cali.physic_zero_pos,\
-							record->last_touch_z, center_z, mapping_props->rs_size, ratio, adev, ABS_Z, reset_drag_touch_postion);
-					} else {
-						if(record->rs_touching == 1) {
-							record->rs_touching = 0;
-							record->last_touch_z = mapping_props->rs.x;
-							record->last_touch_rz = mapping_props->rs.y;
-						}
-						rs_state = 0;
-					}
-				} else if(mapping_props->r_bind_key[0] != 0) {
 					act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
 					if(act_bind_rs) {
 						if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
@@ -736,17 +768,15 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 							record->last_binding_rs = false;
 						}
 					}
-				}
 
-				if(moved(record->last_z, val)) {
-					record->last_z = val;
-					if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz) )  {
+					if(record->last_binding_rs || js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
 						if(record->rs_touching == 0) {
 							record->rs_touching = 1;
 						}
 						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-						record->last_touch_z = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_z, move_limits[mapping_props->rs_size].half_w);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_z = calculate_drag_position(true, val, axis->cali.physic_zero_pos,\
+							record->last_touch_z, center_z, mapping_props->rs_size, ratio, adev, ABS_Z, reset_drag_touch_postion);
 					} else {
 						if(record->rs_touching == 1) {
 							record->rs_touching = 0;
@@ -755,9 +785,50 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 						}
 						rs_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
-				}
+				} else if(mapping_props->rs_type == 0) {
+					if(mapping_props->r_bind_key[0] != 0) {
+						act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_rs) {
+							if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+								id_r = coord_rs.id;
+								center_z = coord_rs.x;
+								if(!record->last_binding_rs) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+									record->last_touch_z = coord_rs.x;
+									record->last_touch_rz = coord_rs.y;
+									record->last_binding_rs = true;
+								}
+							}
+						} else {
+							if(record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								record->last_binding_rs = false;
+							}
+						}
+					}
 
+					if(moved(record->last_z, val)) {
+						record->last_z = val;
+						if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz) )  {
+							if(record->rs_touching == 0) {
+								record->rs_touching = 1;
+							}
+							rs_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
+							record->last_touch_z = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_z, move_limits[mapping_props->rs_size].half_w);
+						} else {
+							if(record->rs_touching == 1) {
+								record->rs_touching = 0;
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+							}
+							rs_state = 0;
+						}
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
+					}
+				}
 				break;
 			case ABS_RZ:
 				if(!rs_enabled)
@@ -766,23 +837,6 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 				id_r = MT_ID_RS;
 				if(mapping_props->rs_type == 2) {
 					record->last_rz = val;
-					if(js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
-						if(record->rs_touching == 0) {
-							record->rs_touching = 1;
-						}
-						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
-						record->last_touch_rz = calculate_drag_position(true, val, axis->cali.physic_zero_pos, \
-							record->last_touch_rz, center_rz, mapping_props->rs_size, ratio, adev, ABS_RZ, reset_drag_touch_postion);
-					} else {
-						if(record->rs_touching == 1) {
-							record->rs_touching = 0;
-							record->last_touch_z = mapping_props->rs.x;
-							record->last_touch_rz = mapping_props->rs.y;
-						}
-						rs_state = 0;
-					}
-				} else if(mapping_props->r_bind_key[0] != 0) {
 					act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
 					if(act_bind_rs) {
 						if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
@@ -803,30 +857,68 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 							record->last_binding_rs = false;
 						}
 					}
-				}
-
-				if(moved(record->last_rz, val)) {
-					record->last_rz = val;
-					if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz)) {
+					if(record->last_binding_rs || js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
 						if(record->rs_touching == 0) {
 							record->rs_touching = 1;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_r, record->rs_touching);
 						}
 						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-						record->last_touch_rz = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_rz, move_limits[mapping_props->rs_size].half_h);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_rz = calculate_drag_position(true, val, axis->cali.physic_zero_pos, \
+							record->last_touch_rz, center_rz, mapping_props->rs_size, ratio, adev, ABS_RZ, reset_drag_touch_postion);
 					} else {
 						if(record->rs_touching == 1) {
 							record->rs_touching = 0;
 							record->last_touch_z = mapping_props->rs.x;
 							record->last_touch_rz = mapping_props->rs.y;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 -> (%d)\n", __LINE__, id_r, record->rs_touching);
 						}
 						rs_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
-				}
+				} else if(mapping_props->rs_type == 0) {
+					if(mapping_props->r_bind_key[0] != 0) {
+						act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_rs) {
+							if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+								id_r = coord_rs.id;
+								center_rz = coord_rs.y;
+								if(!record->last_binding_rs) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+									record->last_touch_z = coord_rs.x;
+									record->last_touch_rz = coord_rs.y;
+									record->last_binding_rs = true;
+								}
+							}
+						} else {
+							if(record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								record->last_binding_rs = false;
+							}
+						}
+					}
 
+					if(moved(record->last_rz, val)) {
+						record->last_rz = val;
+						if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz)) {
+							if(record->rs_touching == 0) {
+								record->rs_touching = 1;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_r, record->rs_touching);
+							}
+							rs_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
+							record->last_touch_rz = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_rz, move_limits[mapping_props->rs_size].half_h);
+						} else {
+							if(record->rs_touching == 1) {
+								record->rs_touching = 0;
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 -> (%d)\n", __LINE__, id_r, record->rs_touching);
+							}
+							rs_state = 0;
+						}
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
+					}
+				}
 				break;
 			case ABS_BRAKE:
 				trigger_state = (abs(val - axis->cali.physic_zero_pos)  > 20);
