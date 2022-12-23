@@ -486,13 +486,19 @@ static int calculate_target_coordinate(bool invert, int js_pos, int js_center, i
 
 static int calculate_drag_position(bool invert, int js_pos, int js_center, int last_touch_pos,int ui_center, int speed, int ratio, struct aks_input_device *adev,  int keycode, void(*should_reset)(struct aks_input_device *, bool, int))
 {
-	int rratio, target;
+	int rratio, target, scale;
 	if(invert) {
 		rratio = (js_pos - js_center) * ratio;
 	} else {
 		rratio = (js_center - js_pos) * ratio;
 	}
-	target  = last_touch_pos + ((rratio * ((speed+1)<<AKS_GAMEPAD_DRAG_SPEED_SHIFT)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
+
+	if(keycode == ABS_X || keycode ==ABS_Z) {
+		scale = AKS_GAMEPAD_DRAG_SPEED_SHIFT-1;
+	} else {
+		scale = AKS_GAMEPAD_DRAG_SPEED_SHIFT;
+	}
+	target  = last_touch_pos + ((rratio * ((speed+1)<<scale)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
 	if(target < 0 ||  target > AKS_GAMEPAD_MT_MAX_HEIGHT) {
 		target = ui_center;
 		should_reset(adev, true, keycode);
