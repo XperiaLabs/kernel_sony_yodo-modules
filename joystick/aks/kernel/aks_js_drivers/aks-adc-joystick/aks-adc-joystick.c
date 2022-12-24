@@ -1707,11 +1707,13 @@ static void aks_gamepad_analog_calibrate(struct aks_analog_key_data *adata)
 			axis->cali.rang_max_calied = 501;
 			#endif
 		}
+		/*
 		dev_err(g_aks_dev->dev, "code=%d, min=%d, max=%d, cali_min=%d, cali_max=%d, ratio_pos=%d, ratio_neg=%d, pc=%d, lc=%d\n", \
 			axis->code, axis->cali.rang_min, axis->cali.rang_max, \
 			axis->cali.rang_min_calied, axis->cali.rang_max_calied, \
 			axis->cali.ratio_pos, axis->cali.ratio_neg, \
 			axis->cali.physic_zero_pos, axis->cali.logic_zero_pos);
+		*/
 	}
 }
 
@@ -1734,9 +1736,10 @@ static int aks_gamepad_analog_update_paras(struct aks_analog_key_data *adata) {
 				adata->axes[i].cali.rang_min_calied, adata->axes[i].cali.rang_max_calied, \
 				adata->axes[i].fuzz, adata->axes[i].flat);
 		}
-
+/*
 		dev_err(g_aks_dev->dev, "code=%d, cali_min=%d, cali_max=%d\n", \
 			adata->axes[i].code, adata->axes[i].cali.rang_min_calied, adata->axes[i].cali.rang_max_calied);
+*/
 	}
 	return 0;
 }
@@ -1819,10 +1822,11 @@ static int aks_gamepad_analog_keys_set_axes(struct device *dev, struct aks_analo
 
         fwnode_property_read_u32(child, "abs-fuzz", &axes[i].fuzz);
         fwnode_property_read_u32(child, "abs-flat", &axes[i].flat);
+		/*
         dev_err(dev, "%s(%d) linux,code=<%d>, abs-range= %d ~ %d, abs-fuzz= %d, abs-flat=%d!\n",\
 			__FUNCTION__, __LINE__, \
             axes[i].code, axes[i].range[0], axes[i].range[1], axes[i].fuzz, axes[i].flat);
-
+		*/
         input_set_abs_params(joy->input, axes[i].code, axes[i].range[0], axes[i].range[1], axes[i].fuzz, axes[i].flat);
         input_set_capability(joy->input, EV_ABS, axes[i].code);
     }
@@ -1972,7 +1976,7 @@ static int aks_gamepad_configure_mt_dev(struct aks_input_device *aks_dev)
 static int aks_gamepad_input_open(struct input_dev *input)
 {
 	struct aks_input_device *aks_dev = input_get_drvdata(input);
-	dev_err(g_aks_dev->dev, "---> %s(%d)\n",__FUNCTION__, __LINE__);
+	dev_err(g_aks_dev->dev, "---> input_open (%d)\n", __LINE__);
 
 	ask_gamepad_gpio_keys_open(aks_dev);
 
@@ -1983,7 +1987,7 @@ static void aks_gamepad_input_close(struct input_dev *input)
 {
 	struct aks_input_device *aks_dev = input_get_drvdata(input);
 
-	dev_err(g_aks_dev->dev, "---> %s(%d)\n",__FUNCTION__, __LINE__);
+	dev_err(g_aks_dev->dev, "---> input_close(%d)\n", __LINE__);
 	ask_gamepad_gpio_keys_close(aks_dev);
 }
 
@@ -2092,7 +2096,7 @@ long aks_input_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     int ioarg = 0;
 	struct aks_input_device *devp = filp->private_data;
 	if(devp == NULL) {
-		dev_err(g_aks_dev->dev, "---> %s(%d) filp->private_data is NULL\n",__FUNCTION__, __LINE__);
+		dev_err(g_aks_dev->dev, "---> %s(%d) private data is NULL\n",__FUNCTION__, __LINE__);
 	}
 
     if (_IOC_TYPE(cmd) != AKS_IOC_MAGIC) 
@@ -2220,8 +2224,8 @@ static void dump_mapping_data(struct aks_multitouch_data *mt_data)
 	dev_err(g_aks_dev->dev, "    rs_size = %d ", mt_data->mapping_props.rs_size);
 	dev_err(g_aks_dev->dev, " l_bind_key = %d ", mt_data->mapping_props.l_bind_key[0]);
 	dev_err(g_aks_dev->dev, " r_bind_key = %d ", mt_data->mapping_props.r_bind_key[0]);
-	dev_err(g_aks_dev->dev, "         ls x=%d, y=%d", mt_data->mapping_props.ls.x, mt_data->mapping_props.ls.y);
-	dev_err(g_aks_dev->dev, "         rs x=%d, y=%d", mt_data->mapping_props.rs.x, mt_data->mapping_props.rs.y);
+	dev_err(g_aks_dev->dev, "   ls x=%d, y=%d", mt_data->mapping_props.ls.x, mt_data->mapping_props.ls.y);
+	dev_err(g_aks_dev->dev, "   rs x=%d, y=%d", mt_data->mapping_props.rs.x, mt_data->mapping_props.rs.y);
 }
 
 static inline int need_parse_pair(char* key)
