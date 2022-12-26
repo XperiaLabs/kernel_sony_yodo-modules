@@ -47,16 +47,13 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
-#define BUTTON 1
-#define JOYSTICK 2 
 
 #define AKS_GAMEPAD_ANALOG_POLL (true)
 
 #define AKS_GAMEPAD_ANALOG_POLL_INTERVAL (10)
 
-#define  AKS_GAMEPAD_FIXED_CENTER_SHIFT (8) //2^8 = FIXED_RANGE_MAX/2
-#define  AKS_GAMEPAD_ENLARGE_SHIFT 		(16)
-
+#define AKS_GAMEPAD_ENLARGE_SHIFT 		(16)
+#define AKS_GAMEPAD_DRAG_SPEED_SHIFT	(3)
 #define AKS_GAMEPAD_MT_MAX_HEIGHT	 (1201)
 #define AKS_GAMEPAD_MT_MAX_WIDTH	 (1201)
 
@@ -81,37 +78,25 @@
 
 #define AKS_IOC_MAXNR 13
 
-#define AKS_GAMEPAD_MT_ID_JS_L 	1
-#define AKS_GAMEPAD_MT_ID_JS_R 	2
-#define AKS_GAMEPAD_MT_ID_TRIG_L	3
-#define AKS_GAMEPAD_MT_ID_TRIG_R	4
-
-#define MT_ID_NUMBERS 21
-
-enum aks_input_mt_id_bits {
-	MT_BIT_A     = 1,
-	MT_BIT_B 	 = 1<<2,
-	MT_BIT_X 	 = 1<<3,
-	MT_BIT_Y 	 = 1<<4,
-	MT_BIT_L1 	 = 1<<5,
-	MT_BIT_R1 	 = 1<<6,
-	MT_BIT_L2 	 = 1<<7,
-	MT_BIT_R2 	 = 1<<8,
-	MT_BIT_DU 	 = 1<<9,
-	MT_BIT_DD 	 = 1<<10,
-	MT_BIT_DL 	 = 1<<11,
-	MT_BIT_DR 	 = 1<<12,
-	MT_BIT_L3 	 = 1<<13,
-	MT_BIT_L4 	 = 1<<14,
-	MT_BIT_LS 	 = 1<<15,
-	MT_BIT_RS 	 = 1<<16,
-	MT_BIT_SELECT = 1<<17,
-	MT_BIT_START = 1<<18,
-	MT_BIT_FUNC	= 1<<19,
-	MT_BIT_SYSRQ = 1<<20,
-	MT_BIT_MODE = 1<<21,
+enum aks_input_key_bit_offset {
+	KEYCODE_BIT_OFFSET_A     = 0,
+	KEYCODE_BIT_OFFSET_B 	 = 1,
+	KEYCODE_BIT_OFFSET_X 	 = 2,
+	KEYCODE_BIT_OFFSET_Y 	 = 3,
+	KEYCODE_BIT_OFFSET_L1 	 = 4,
+	KEYCODE_BIT_OFFSET_R1 	 = 5,
+	KEYCODE_BIT_OFFSET_L2 	 = 6,
+	KEYCODE_BIT_OFFSET_R2 	 = 7,
+	KEYCODE_BIT_OFFSET_DU 	 = 8,
+	KEYCODE_BIT_OFFSET_DD 	 = 9,
+	KEYCODE_BIT_OFFSET_DL 	 = 10,
+	KEYCODE_BIT_OFFSET_DR 	 = 11,
+	KEYCODE_BIT_OFFSET_L3 	 = 12,
+	KEYCODE_BIT_OFFSET_R3 	 = 13,
 };
 
+#define AKS_GAMEPAD_BINDABLE_KEYS 21
+#define AKS_GAMEPAD_KEYCODE_BITS_MAX 16 //It MUST larger or equals the numbers of enum aks_input_key_bit_offset
 
 enum aks_input_mt_ids {
 	MT_ID_A = 1,
@@ -141,8 +126,22 @@ enum aks_input_mt_ids {
 #define AKS_GAMEPAD_MT_MAX_CONTACTS  (MT_ID_MAX)
 
 struct pair {
+	unsigned int keycode;
 	int x;
 	int y;
+	int id;
+};
+
+struct coordinate {
+	int x;
+	int y;
+};
+
+struct keycode_keybit_map {
+	unsigned int code;
+	enum aks_input_key_bit_offset bit_shift;
+	enum aks_input_mt_ids touch_id;
+	struct coordinate coord;
 };
 
 struct touch_move_limit {
@@ -152,39 +151,18 @@ struct touch_move_limit {
 	int half_h;
 };
 
-
-struct mapping_data {
-	struct pair a;
-	struct pair b;
-	struct pair x;
-	struct pair y;
-	struct pair l1;
-	struct pair r1;
-	struct pair l2;
-	struct pair r2;
-	struct pair du;
-	struct pair dd;
-	struct pair dl;
-	struct pair dr;
-	struct pair l3;
-	struct pair r3;
-	struct pair ls;
-	struct pair rs;
-	struct pair select;
-	struct pair start;
-	struct pair mode;
-	struct pair fn;
-	struct pair sysrq;
+struct button_mapping_props {
 	int slot;
 	int rotation;
 	int ls_type;
 	int rs_type;
 	int ls_size;
 	int rs_size;
-	int l_bind;
-	int r_bind;
+	unsigned long l_bind_key[1];
+	unsigned long r_bind_key[1];
+	struct pair ls;
+	struct pair rs;
 };
-
 
 struct aks_gpio_button_data {
 	struct aks_input_device* aks_dev;
@@ -257,17 +235,20 @@ struct aks_analog_key_data {
 	struct aks_analog_key_axis *axes;
 	struct iio_channel *chans;
 	struct aks_analog_key_axis_pos z_coord;
-	struct aks_analog_key_axis_pos pre_pos;
 	int num_chans;
 	bool polled;
 };
 
+#define AKS_MAPPING_DATA_MAX_LENGTH 1024
+
 struct aks_multitouch_data {
 	struct aks_input_device *aks_dev;
 	struct input_dev *mt_input;
-	struct mapping_data mapping_data;
+	struct pair mapping_coords[AKS_GAMEPAD_BINDABLE_KEYS];
+	struct button_mapping_props  mapping_props;
+	int mapping_coords_index;
 	int max_touch_num;
-	unsigned char raw[512];
+	unsigned char raw[AKS_MAPPING_DATA_MAX_LENGTH];
 };
 
 struct aks_js_mt_status_recoder {
@@ -283,6 +264,8 @@ struct aks_js_mt_status_recoder {
 	int last_touch_y;
 	int last_touch_z;
 	int last_touch_rz;
+	bool last_binding_ls;
+	bool last_binding_rs;
 };
 
 struct aks_input_device {
@@ -295,6 +278,7 @@ struct aks_input_device {
 	struct aks_multitouch_data *mt_data;
 	struct aks_js_mt_status_recoder js_record;
 	struct mutex mutex;
+	struct mutex ipc_mutex;
 	int work_mode;
 };
 
@@ -305,16 +289,41 @@ static int CURRENT_WORK_MODE = AKS_GAMEPAD_WORK_MODE_DIRECT;
 
 static struct touch_move_limit move_limits[] = 
 	{
-		{25, 50, 12, 25}, \
-		{50, 100, 25, 50}, \
-		{75, 150, 37, 75}, \
-		{100, 200, 50, 100} \
+		{76, 150, 38, 76}, \
+		{150, 300, 76, 150}, \
+		{226, 450, 114, 226}, \
+		{300, 600, 150, 300}  \
 	};
 
-//static DECLARE_BITMAP(mt_id_status, MT_ID_NUMBERS);
+static struct keycode_keybit_map aks_gamepad_keycode_bit_map[] =
+{
+	{BTN_A, KEYCODE_BIT_OFFSET_A, MT_ID_A, {0, 0}}, \
+	{BTN_B, KEYCODE_BIT_OFFSET_B, MT_ID_B, {0, 0}}, \
+	{BTN_X, KEYCODE_BIT_OFFSET_X, MT_ID_X, {0, 0}}, \
+	{BTN_Y, KEYCODE_BIT_OFFSET_Y, MT_ID_Y, {0, 0}}, \
+	{BTN_TL, KEYCODE_BIT_OFFSET_L1, MT_ID_L1, {0, 0}}, \
+	{BTN_TR, KEYCODE_BIT_OFFSET_R1, MT_ID_R1, {0, 0}}, \
+	{BTN_DPAD_LEFT, KEYCODE_BIT_OFFSET_DL, MT_ID_DL, {0, 0}}, \
+	{BTN_DPAD_RIGHT, KEYCODE_BIT_OFFSET_DR, MT_ID_DR, {0, 0}}, \
+	{BTN_DPAD_UP, KEYCODE_BIT_OFFSET_DU, MT_ID_DU, {0, 0}}, \
+	{BTN_DPAD_DOWN, KEYCODE_BIT_OFFSET_DD, MT_ID_DD, {0, 0}}, \
+	{BTN_THUMBL, KEYCODE_BIT_OFFSET_L3, MT_ID_L3, {0, 0}}, \
+	{BTN_THUMBR, KEYCODE_BIT_OFFSET_R3, MT_ID_R3, {0, 0}}, \
+	{ABS_BRAKE, KEYCODE_BIT_OFFSET_L2, MT_ID_L2, {0, 0}}, \
+	{ABS_GAS, KEYCODE_BIT_OFFSET_R2, MT_ID_R2, {0, 0}}, \
+};
+
+#define AKS_GAMEPAD_KEYCODE_BITS_COUNT (sizeof(aks_gamepad_keycode_bit_map)/sizeof(aks_gamepad_keycode_bit_map[0]))
+
+
+static DECLARE_BITMAP(aks_gamepad_button_status, AKS_GAMEPAD_KEYCODE_BITS_MAX);
+
+static DECLARE_BITMAP(aks_gamepad_touch_number, AKS_GAMEPAD_KEYCODE_BITS_MAX);
+
+//static unsigned long aks_gamepad_button_status[1];
 
 static inline int js_l_touched(struct aks_analog_key_data *adata, int x, int y) {
-	if((abs(x - adata->z_coord.x) < 50) && (abs(y - adata->z_coord.y) < 50)) {
+	if((abs(x - adata->z_coord.x) < 65) && (abs(y - adata->z_coord.y) < 65)) {
 		return 0;
 	} else {
 		return 1;
@@ -322,11 +331,39 @@ static inline int js_l_touched(struct aks_analog_key_data *adata, int x, int y) 
 }
 
 static inline int js_r_touched(struct aks_analog_key_data *adata, int x, int y) {
-	if((abs(x - adata->z_coord.z) < 50) && (abs(y - adata->z_coord.rz) < 50)) {
+	if((abs(x - adata->z_coord.z) < 65) && (abs(y - adata->z_coord.rz) < 65)) {
 		return 0;
 	} else {
 		return 1;
 	}
+}
+
+static inline int js_l_draging(struct aks_analog_key_data *adata, int x, int y) {
+	if((abs(x - adata->z_coord.x) < 75) && (abs(y - adata->z_coord.y) < 75)) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+static inline int js_r_draging(struct aks_analog_key_data *adata, int x, int y) {
+	if((abs(x - adata->z_coord.z) < 75) && (abs(y - adata->z_coord.rz) < 75)) {
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+
+int count_bit_one(unsigned long n)
+{
+    int count = 0;
+    while (n)
+    {
+        n = n & (n - 1);
+        count++;
+    }
+    return count;
 }
 
 
@@ -343,217 +380,20 @@ static inline bool str_starts_with(const char *a, const char *b)
 
 static inline bool get_touch_info(struct aks_input_device* adev, unsigned int code, int *x, int *y, int *id)
 {
-
-	if(!adev->mt_data->mt_input) 
+	struct aks_multitouch_data *mt_data = adev->mt_data;
+	int i=0;
+	if(!mt_data->mt_input)
 		return false;
 
-	switch(code) {
-		case BTN_TL:
-			if(adev->mt_data->mapping_data.l1.x || adev->mt_data->mapping_data.l1.y) {
-				*id = MT_ID_L1;
-				*x = adev->mt_data->mapping_data.l1.x;
-				*y= adev->mt_data->mapping_data.l1.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_TR:
-			if(adev->mt_data->mapping_data.r1.x || adev->mt_data->mapping_data.r1.y) {
-				*id = MT_ID_R1;
-				*x = adev->mt_data->mapping_data.r1.x;
-				*y= adev->mt_data->mapping_data.r1.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_THUMBL:
-			if(adev->mt_data->mapping_data.l3.x || adev->mt_data->mapping_data.l3.y) {
-				*id = MT_ID_L3;
-				*x = adev->mt_data->mapping_data.l3.x;
-				*y= adev->mt_data->mapping_data.l3.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_THUMBR:
-			if(adev->mt_data->mapping_data.r3.x || adev->mt_data->mapping_data.r3.y) {
-				*id = MT_ID_R3;
-				*x = adev->mt_data->mapping_data.r3.x;
-				*y= adev->mt_data->mapping_data.r3.y;
-				return true;
-			} else {
-				return false;
-			}
-
-			break;
-		case BTN_A:
-			if(adev->mt_data->mapping_data.a.x || adev->mt_data->mapping_data.a.y) {
-				*id = MT_ID_A;
-				*x = adev->mt_data->mapping_data.a.x;
-				*y= adev->mt_data->mapping_data.a.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_B:
-			if(adev->mt_data->mapping_data.b.x || adev->mt_data->mapping_data.b.y) {
-				*id = MT_ID_B;
-				*x = adev->mt_data->mapping_data.b.x;
-				*y= adev->mt_data->mapping_data.b.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_X:
-			if(adev->mt_data->mapping_data.x.x || adev->mt_data->mapping_data.x.y) {
-				*id = MT_ID_X;
-				*x = adev->mt_data->mapping_data.x.x;
-				*y= adev->mt_data->mapping_data.x.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_Y:
-			if(adev->mt_data->mapping_data.y.x || adev->mt_data->mapping_data.y.y) {
-				*id = MT_ID_Y;
-				*x = adev->mt_data->mapping_data.y.x;
-				*y= adev->mt_data->mapping_data.y.y;
-				return true;
-			} else {
-				return false;
-			}
-
-			break;
-		case BTN_DPAD_UP:
-			if(adev->mt_data->mapping_data.du.x || adev->mt_data->mapping_data.du.y) {
-				*id = MT_ID_DU;
-				*x = adev->mt_data->mapping_data.du.x;
-				*y= adev->mt_data->mapping_data.du.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_DPAD_DOWN:
-			if(adev->mt_data->mapping_data.dd.x || adev->mt_data->mapping_data.dd.y) {
-				*id = MT_ID_DD;
-				*x = adev->mt_data->mapping_data.dd.x;
-				*y= adev->mt_data->mapping_data.dd.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_DPAD_LEFT:
-			if(adev->mt_data->mapping_data.dl.x || adev->mt_data->mapping_data.dl.y) {
-				*id = MT_ID_DL;
-				*x = adev->mt_data->mapping_data.dl.x;
-				*y= adev->mt_data->mapping_data.dl.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_DPAD_RIGHT:
-			if(adev->mt_data->mapping_data.dr.x || adev->mt_data->mapping_data.dr.y) {
-				*id = MT_ID_DR;
-				*x = adev->mt_data->mapping_data.dr.x;
-				*y= adev->mt_data->mapping_data.dr.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_START:
-			if(adev->mt_data->mapping_data.start.x || adev->mt_data->mapping_data.start.y) {
-				*id = MT_ID_START;
-				*x = adev->mt_data->mapping_data.start.x;
-				*y= adev->mt_data->mapping_data.start.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case KEY_SYSRQ:
-			if(adev->mt_data->mapping_data.sysrq.x || adev->mt_data->mapping_data.sysrq.y) {
-				*id = MT_ID_SYSRQ;
-				*x = adev->mt_data->mapping_data.sysrq.x;
-				*y= adev->mt_data->mapping_data.sysrq.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case KEY_FN:
-			if(adev->mt_data->mapping_data.fn.x || adev->mt_data->mapping_data.fn.y) {
-				*id = MT_ID_FUNC;
-				*x = adev->mt_data->mapping_data.fn.x;
-				*y= adev->mt_data->mapping_data.fn.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case BTN_MODE:
-			if(adev->mt_data->mapping_data.mode.x || adev->mt_data->mapping_data.mode.y) {
-				*id = MT_ID_MODE;
-				*x = adev->mt_data->mapping_data.mode.x;
-				*y= adev->mt_data->mapping_data.mode.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case ABS_X:
-		case ABS_Y:
-			if(adev->mt_data->mapping_data.ls.x || adev->mt_data->mapping_data.ls.y) {
-				*id = MT_ID_LS;
-				*x = adev->mt_data->mapping_data.ls.x;
-				*y= adev->mt_data->mapping_data.ls.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case ABS_Z:
-		case ABS_RZ:
-			if(adev->mt_data->mapping_data.rs.x || adev->mt_data->mapping_data.rs.y) {
-				*id = MT_ID_RS;
-				*x = adev->mt_data->mapping_data.rs.x;
-				*y= adev->mt_data->mapping_data.rs.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case ABS_BRAKE:
-			if(adev->mt_data->mapping_data.l2.x || adev->mt_data->mapping_data.l2.y) {
-				*id = MT_ID_L2;
-				*x = adev->mt_data->mapping_data.l2.x;
-				*y= adev->mt_data->mapping_data.l2.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-		case ABS_GAS:
-			if(adev->mt_data->mapping_data.r2.x || adev->mt_data->mapping_data.r2.y) {
-				*id = MT_ID_R2;
-				*x = adev->mt_data->mapping_data.r2.x;
-				*y= adev->mt_data->mapping_data.r2.y;
-				return true;
-			} else {
-				return false;
-			}
-			break;
-
+	for(i=0; i<AKS_GAMEPAD_BINDABLE_KEYS; i++) {
+		if(mt_data->mapping_coords[i].keycode == code) {
+			*id = mt_data->mapping_coords[i].id;
+			*x= mt_data->mapping_coords[i].x;
+			*y= mt_data->mapping_coords[i].y;
+			return true;
+		}
 	}
+
 	return false;
 }
 
@@ -561,7 +401,7 @@ static int touched_num = 0;
 
 static void aks_gamepad_mt_report_touch_event(struct aks_input_device *adev, int x, int y, int id, int state)
 {
-	if(adev->mt_data->mapping_data.rotation == 0) {
+	if(adev->mt_data->mapping_props.rotation == 0) {
 		swap(x, y);
 	}
 
@@ -571,18 +411,61 @@ static void aks_gamepad_mt_report_touch_event(struct aks_input_device *adev, int
 		input_report_abs(adev->mt_input, ABS_MT_POSITION_X, x);
 		input_report_abs(adev->mt_input, ABS_MT_POSITION_Y, y);
 		input_report_abs(adev->mt_input, ABS_MT_TOUCH_MAJOR, 0x6000);
-		touched_num++;
 	} else {
 		input_mt_slot(adev->mt_input, id);
 		input_mt_report_slot_state(adev->mt_input, MT_TOOL_FINGER, false);
-		touched_num--;
 	}
+	state ? set_bit(id-1, aks_gamepad_touch_number) : clear_bit(id-1, aks_gamepad_touch_number);
+}
+
+static int find_keycode_shift_bit_pos(unsigned int code) {
+	int i=0;
+	for(i=0; i<AKS_GAMEPAD_KEYCODE_BITS_COUNT; i++) {
+		if(code == aks_gamepad_keycode_bit_map[i].code) {
+			return aks_gamepad_keycode_bit_map[i].bit_shift;
+		}
+	}
+	return -1;
+}
+
+static int find_keycode_bit_map_index_by_code(unsigned int code) {
+	int i=0;
+	for(i=0; i<AKS_GAMEPAD_KEYCODE_BITS_COUNT; i++) {
+		if(code == aks_gamepad_keycode_bit_map[i].code) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+
+static int set_keycode_shift_bit_map(unsigned int code, int state) {
+	int bit_pos = find_keycode_shift_bit_pos(code);
+	if(bit_pos != -1) {
+		state ? set_bit(bit_pos, aks_gamepad_button_status) : clear_bit(bit_pos, aks_gamepad_button_status);
+		return 0;
+	}
+	return -1;
+}
+
+static int get_active_bind_key_coord(int val, struct pair *coord) {
+	int i=0;
+	for(i=0; i<AKS_GAMEPAD_KEYCODE_BITS_COUNT; i++) {
+		if(val == (1<<aks_gamepad_keycode_bit_map[i].bit_shift)) {
+			coord->x=aks_gamepad_keycode_bit_map[i].coord.x;
+			coord->y=aks_gamepad_keycode_bit_map[i].coord.y;
+			coord->id=aks_gamepad_keycode_bit_map[i].touch_id;
+			return 0;
+		}
+	}
+	return -1;
 }
 
 static void aks_gamepad_handle_button_to_touch(struct aks_input_device *adev, unsigned int code, int state)
 {
 	int x, y, id;
 	if(get_touch_info(adev, code, &x, &y, &id)) {
+		set_keycode_shift_bit_map(code, state);
 		aks_gamepad_mt_report_touch_event(adev, x, y, id, state);
 	} else {
 		dev_err(adev->dev, "Analog Button %d mapping error", code);
@@ -597,8 +480,29 @@ static int calculate_target_coordinate(bool invert, int js_pos, int js_center, i
 	} else {
 		rratio = (js_center - js_pos) * ratio;
 	}
-
 	target  = ui_center + ((rratio * ui_hf_limite) >> AKS_GAMEPAD_ENLARGE_SHIFT);
+	return target;
+}
+
+static int calculate_drag_position(bool invert, int js_pos, int js_center, int last_touch_pos,int ui_center, int speed, int ratio, struct aks_input_device *adev,  int keycode, void(*should_reset)(struct aks_input_device *, bool, int))
+{
+	int rratio, target, scale;
+	if(invert) {
+		rratio = (js_pos - js_center) * ratio;
+	} else {
+		rratio = (js_center - js_pos) * ratio;
+	}
+
+	if(keycode == ABS_X || keycode ==ABS_Z) {
+		scale = AKS_GAMEPAD_DRAG_SPEED_SHIFT-1;
+	} else {
+		scale = AKS_GAMEPAD_DRAG_SPEED_SHIFT;
+	}
+	target  = last_touch_pos + ((rratio * ((speed+1)<<scale)) >> AKS_GAMEPAD_ENLARGE_SHIFT);
+	if(target < 0 ||  target > AKS_GAMEPAD_MT_MAX_HEIGHT) {
+		target = ui_center;
+		should_reset(adev, true, keycode);
+	}
 	return target;
 }
 
@@ -607,17 +511,36 @@ static inline bool js_enabled(int a, int b) {
 	return (a!=0 && b!=0);
 }
 
+struct pair coord_ls, coord_rs;
+
+static void reset_drag_touch_postion( struct aks_input_device *adev, bool reset, int key_code) {
+	switch(key_code) {
+		case ABS_X:
+		case ABS_Y:
+			aks_gamepad_mt_report_touch_event(adev, adev->js_record.last_touch_x, adev->js_record.last_touch_x, MT_ID_LS, false);
+			break;
+		case ABS_Z:
+		case ABS_RZ:
+			aks_gamepad_mt_report_touch_event(adev, adev->js_record.last_touch_z, adev->js_record.last_touch_rz, MT_ID_RS, false);
+			break;
+		default:
+			break;
+	}
+}
+
 static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 	struct aks_analog_key_axis *axis;
 	struct aks_js_mt_status_recoder *record = &adev->js_record;
-	struct mapping_data *map_data = &adev->mt_data->mapping_data;
+	struct button_mapping_props* mapping_props = &adev->mt_data->mapping_props;
 
-	int trigger_state, ls_state, rs_state;
+	int trigger_state, ls_state;
 	s32 i, val, ratio;
 	bool ls_enabled = false,  rs_enabled = false;
+	int center_x, center_y, id_l;
+	int act_bind_ls ,id_r, center_z, center_rz, act_bind_rs, rs_state;
 
-	ls_enabled = js_enabled(map_data->ls.x, map_data->ls.y);
-	rs_enabled = js_enabled(map_data->rs.x, map_data->rs.y);
+	ls_enabled = (js_enabled(mapping_props->ls.x, mapping_props->ls.y) || mapping_props->l_bind_key[0] != 0);
+	rs_enabled = (js_enabled(mapping_props->rs.x, mapping_props->rs.y) || mapping_props->r_bind_key[0] != 0);
 
 	mutex_lock(&adev->mutex);
 
@@ -627,114 +550,386 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 
 		switch(axis->code) {
 			case ABS_X:
-				if(!ls_enabled)
+				if(!ls_enabled) {
 					continue;
-				if(moved(record->last_x, val)) {
+				}
+				center_x = mapping_props->ls.x;
+				id_l = MT_ID_LS;
+
+				if(mapping_props->ls_type == 2) {
 					record->last_x = val;
-					if(js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+					if(mapping_props->l_bind_key[0] != 0) {
+						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_ls) {
+							if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+								id_l = coord_ls.id;
+								center_x = coord_ls.x;
+								if(!record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+									record->last_touch_x = coord_ls.x;
+									record->last_touch_y = coord_ls.y;
+									record->last_binding_ls = true;
+								}
+							}
+						} else {
+							if(record->last_binding_ls) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								record->last_binding_ls = false;
+							}
+						}
+					}
+
+					if(record->last_binding_ls || js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
 						if(record->ls_touching == 0) {
-							//touched_num++;
 							record->ls_touching = 1;
 						}
 						ls_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-						record->last_touch_x = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, map_data->ls.x , move_limits[map_data->ls_size].half_w);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_x = calculate_drag_position(false, val, axis->cali.physic_zero_pos,\
+							record->last_touch_x, center_x, mapping_props->ls_size, ratio, adev, ABS_X, reset_drag_touch_postion);
 					} else {
 						if(record->ls_touching == 1) {
-							//touched_num--;
 							record->ls_touching = 0;
+							record->last_touch_x = mapping_props->ls.x;
+							record->last_touch_y = mapping_props->ls.y;
 						}
 						ls_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, ls_state);
-				}
+				} else if(mapping_props->ls_type == 0) {
+					if (mapping_props->ls_type == 0) {
+						if(mapping_props->l_bind_key[0] != 0) {
+							act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+							if(act_bind_ls) {
+								if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+									id_l = coord_ls.id;
+									center_x = coord_ls.x;
+									if(!record->last_binding_ls) {
+										aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+										record->last_touch_x = coord_ls.x;
+										record->last_touch_y = coord_ls.y;
+										record->last_binding_ls = true;
+									}
+								}
+							} else {
+								if(record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+									record->last_touch_x = mapping_props->ls.x;
+									record->last_touch_y = mapping_props->ls.y;
+									record->last_binding_ls = false;
+								}
+							}
+						}
 
+						if(moved(record->last_x, val)) {
+							record->last_x = val;
+							if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+								if(record->ls_touching == 0) {
+									record->ls_touching = 1;
+								}
+								ls_state = 1;
+								ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+								record->last_touch_x = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_x, move_limits[mapping_props->ls_size].half_w);
+							} else {
+								if(record->ls_touching == 1) {
+									record->ls_touching = 0;
+									record->last_touch_x = mapping_props->ls.x;
+									record->last_touch_y = mapping_props->ls.y;
+								}
+								ls_state = 0;
+							}
+							aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
+						}
+					}
+				}
 				break;
 			case ABS_Y:
 				if(!ls_enabled)
 					continue;
-				if(moved(record->last_y, val)) {
+				center_y = mapping_props->ls.y;
+				id_l = MT_ID_LS;
+
+				if(mapping_props->ls_type == 2) {
 					record->last_y = val;
-					if(js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+					if(mapping_props->l_bind_key[0] != 0) {
+						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_ls) {
+							if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+								id_l = coord_ls.id;
+								center_y = coord_ls.y;
+								if(!record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+									record->last_touch_x = coord_ls.x;
+									record->last_touch_y = coord_ls.y;
+									record->last_binding_ls = true;
+								}
+							}
+						} else {
+							if(record->last_binding_ls) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								record->last_binding_ls = false;
+							}
+						}
+					}
+
+					if(record->last_binding_ls || js_l_draging(adev->analog_data, record->last_x, record->last_y)) {
 						if(record->ls_touching == 0) {
 							record->ls_touching = 1;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, MT_ID_LS, record->ls_touching);
 						}
-
 						ls_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-					record->last_touch_y = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, map_data->ls.y , move_limits[map_data->ls_size].half_h);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_y = calculate_drag_position(false, val, axis->cali.physic_zero_pos, \
+							record->last_touch_y, center_y, mapping_props->ls_size, ratio, adev, ABS_Y, reset_drag_touch_postion);
 					} else {
 						if(record->ls_touching == 1) {
 							record->ls_touching = 0;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 ->  (%d)\n", __LINE__, MT_ID_LS, record->ls_touching);
+							record->last_touch_x = mapping_props->ls.x;
+							record->last_touch_y = mapping_props->ls.y;
 						}
 						ls_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, ls_state);
+				} else if(mapping_props->ls_type == 0) {
+					if(mapping_props->l_bind_key[0] != 0) {
+						act_bind_ls = (mapping_props->l_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_ls) {
+							if(get_active_bind_key_coord(act_bind_ls, &coord_ls) == 0) {
+								id_l = coord_ls.id;
+								center_y = coord_ls.y;
+								if(!record->last_binding_ls) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, MT_ID_LS, false);
+									record->last_touch_x = coord_ls.x;
+									record->last_touch_y = coord_ls.y;
+									record->last_binding_ls = true;
+								}
+							}
+						} else {
+							if(record->last_binding_ls) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, coord_ls.id, false);
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								record->last_binding_ls = false;
+							}
+						}
+					}
+					if(moved(record->last_y, val)) {
+						record->last_y = val;
+						if(record->last_binding_ls || js_l_touched(adev->analog_data, record->last_x, record->last_y)) {
+							if(record->ls_touching == 0) {
+								record->ls_touching = 1;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
+							}
+							ls_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : (axis->cali.enlarge_ratio_min);
+							record->last_touch_y = calculate_target_coordinate(false, val, axis->cali.physic_zero_pos, ratio, center_y, move_limits[mapping_props->ls_size].half_h);
+						} else {
+							if(record->ls_touching == 1) {
+								record->ls_touching = 0;
+								record->last_touch_x = mapping_props->ls.x;
+								record->last_touch_y = mapping_props->ls.y;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 ->  (%d)\n", __LINE__, id_l, record->ls_touching);
+							}
+							ls_state = 0;
+						}
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
+					}
 				}
 
-
 				break;
+
 			case ABS_Z:
 				if(!rs_enabled)
 					continue;
-				if(moved(record->last_z, val)) {
+
+				center_z = mapping_props->rs.x;
+				id_r = MT_ID_RS;
+
+				if(mapping_props->rs_type == 2) {
 					record->last_z = val;
-					if(js_r_touched(adev->analog_data, record->last_z, record->last_rz)) {
+					act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+					if(act_bind_rs) {
+						if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+							id_r = coord_rs.id;
+							center_z = coord_rs.x;
+							if(!record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+								record->last_touch_z = coord_rs.x;
+								record->last_touch_rz = coord_rs.y;
+								record->last_binding_rs = true;
+							}
+						}
+					} else {
+						if(record->last_binding_rs) {
+							aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+							record->last_touch_z = mapping_props->rs.x;
+							record->last_touch_rz = mapping_props->rs.y;
+							record->last_binding_rs = false;
+						}
+					}
+
+					if(record->last_binding_rs || js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
 						if(record->rs_touching == 0) {
 							record->rs_touching = 1;
 						}
 						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-						record->last_touch_z = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, map_data->rs.x, move_limits[map_data->rs_size].half_w);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_z = calculate_drag_position(true, val, axis->cali.physic_zero_pos,\
+							record->last_touch_z, center_z, mapping_props->rs_size, ratio, adev, ABS_Z, reset_drag_touch_postion);
 					} else {
 						if(record->rs_touching == 1) {
 							record->rs_touching = 0;
+							record->last_touch_z = mapping_props->rs.x;
+							record->last_touch_rz = mapping_props->rs.y;
 						}
 						rs_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, rs_state);
-				}
+				} else if(mapping_props->rs_type == 0) {
+					if(mapping_props->r_bind_key[0] != 0) {
+						act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_rs) {
+							if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+								id_r = coord_rs.id;
+								center_z = coord_rs.x;
+								if(!record->last_binding_rs) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+									record->last_touch_z = coord_rs.x;
+									record->last_touch_rz = coord_rs.y;
+									record->last_binding_rs = true;
+								}
+							}
+						} else {
+							if(record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								record->last_binding_rs = false;
+							}
+						}
+					}
 
+					if(moved(record->last_z, val)) {
+						record->last_z = val;
+						if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz) )  {
+							if(record->rs_touching == 0) {
+								record->rs_touching = 1;
+							}
+							rs_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
+							record->last_touch_z = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_z, move_limits[mapping_props->rs_size].half_w);
+						} else {
+							if(record->rs_touching == 1) {
+								record->rs_touching = 0;
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+							}
+							rs_state = 0;
+						}
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
+					}
+				}
 				break;
 			case ABS_RZ:
 				if(!rs_enabled)
 					continue;
-				if(moved(record->last_rz, val)) {
+				center_rz = mapping_props->rs.y;
+				id_r = MT_ID_RS;
+				if(mapping_props->rs_type == 2) {
 					record->last_rz = val;
-					if(js_r_touched(adev->analog_data, record->last_z, record->last_rz)) {
+					act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+					if(act_bind_rs) {
+						if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+							id_r = coord_rs.id;
+							center_rz = coord_rs.y;
+							if(!record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+								record->last_touch_z = coord_rs.x;
+								record->last_touch_rz = coord_rs.y;
+								record->last_binding_rs = true;
+							}
+						}
+					} else {
+						if(record->last_binding_rs) {
+							aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+							record->last_touch_z = mapping_props->rs.x;
+							record->last_touch_rz = mapping_props->rs.y;
+							record->last_binding_rs = false;
+						}
+					}
+					if(record->last_binding_rs || js_r_draging(adev->analog_data, record->last_z, record->last_rz)) {
 						if(record->rs_touching == 0) {
 							record->rs_touching = 1;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, MT_ID_RS, record->rs_touching);
 						}
 						rs_state = 1;
-						ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
-						record->last_touch_rz = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, map_data->rs.y, move_limits[map_data->rs_size].half_h);
+						ratio = (axis->cali.physic_zero_pos - val > 0) ? (axis->cali.enlarge_ratio_max) : axis->cali.enlarge_ratio_min;
+						record->last_touch_rz = calculate_drag_position(true, val, axis->cali.physic_zero_pos, \
+							record->last_touch_rz, center_rz, mapping_props->rs_size, ratio, adev, ABS_RZ, reset_drag_touch_postion);
 					} else {
 						if(record->rs_touching == 1) {
 							record->rs_touching = 0;
-							dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 -> 0 (%d)\n", __LINE__, MT_ID_RS, record->rs_touching);
+							record->last_touch_z = mapping_props->rs.x;
+							record->last_touch_rz = mapping_props->rs.y;
 						}
 						rs_state = 0;
 					}
-					aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, rs_state);
-				}
+				} else if(mapping_props->rs_type == 0) {
+					if(mapping_props->r_bind_key[0] != 0) {
+						act_bind_rs = (mapping_props->r_bind_key[0] & aks_gamepad_button_status[0]);
+						if(act_bind_rs) {
+							if(get_active_bind_key_coord(act_bind_rs, &coord_rs) == 0) {
+								id_r = coord_rs.id;
+								center_rz = coord_rs.y;
+								if(!record->last_binding_rs) {
+									aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, MT_ID_RS, false);
+									record->last_touch_z = coord_rs.x;
+									record->last_touch_rz = coord_rs.y;
+									record->last_binding_rs = true;
+								}
+							}
+						} else {
+							if(record->last_binding_rs) {
+								aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, coord_rs.id, false);
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								record->last_binding_rs = false;
+							}
+						}
+					}
 
+					if(moved(record->last_rz, val)) {
+						record->last_rz = val;
+						if(record->last_binding_rs || js_r_touched(adev->analog_data, record->last_z, record->last_rz)) {
+							if(record->rs_touching == 0) {
+								record->rs_touching = 1;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 0 ->  (%d)\n", __LINE__, id_r, record->rs_touching);
+							}
+							rs_state = 1;
+							ratio = (axis->cali.physic_zero_pos - val > 0) ? axis->cali.enlarge_ratio_max : axis->cali.enlarge_ratio_min;
+							record->last_touch_rz = calculate_target_coordinate(true, val, axis->cali.physic_zero_pos, ratio, center_rz, move_limits[mapping_props->rs_size].half_h);
+						} else {
+							if(record->rs_touching == 1) {
+								record->rs_touching = 0;
+								record->last_touch_z = mapping_props->rs.x;
+								record->last_touch_rz = mapping_props->rs.y;
+								dev_err(adev->dev, "[%d]Touch(id=%d) statue 1 -> (%d)\n", __LINE__, id_r, record->rs_touching);
+							}
+							rs_state = 0;
+						}
+						aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
+					}
+				}
 				break;
 			case ABS_BRAKE:
 				trigger_state = (abs(val - axis->cali.physic_zero_pos)  > 20);
 				if(record->last_l2 != trigger_state) {
-					dev_err(adev->dev, "L2 status changed (%d) - > (%d)\n", record->last_l2, trigger_state);
 					record->last_l2 = trigger_state;
 					aks_gamepad_handle_button_to_touch(adev, ABS_BRAKE, trigger_state);
 				}
 				break;
 			case ABS_GAS:
 				trigger_state = (abs(val - axis->cali.physic_zero_pos)  > 20);
-				//dev_err(g_aks_dev->dev, "ABS_GAS, val=%d, pos=%d, record->last_r2=%d, trigger_state=%d\n", val, axis->cali.physic_zero_pos, record->last_r2, trigger_state);
 				if(record->last_r2 != trigger_state) {
-					dev_err(adev->dev, "R2 status changed (%d) - > (%d)\n", record->last_r2, trigger_state);
 					record->last_r2 = trigger_state;
 					aks_gamepad_handle_button_to_touch(adev, ABS_GAS, trigger_state);
 				}
@@ -743,7 +938,16 @@ static int aks_gamepad_handle_js_to_touch(struct aks_input_device *adev) {
 				break;
 		}
 	}
-	input_report_key(adev->mt_input, BTN_TOUCH, touched_num > 0 ? 1 : 0);
+
+	if(mapping_props->ls_type == 2) {
+		aks_gamepad_mt_report_touch_event(adev, record->last_touch_x, record->last_touch_y, id_l, ls_state);
+	}
+
+	if(mapping_props->rs_type == 2) {
+		aks_gamepad_mt_report_touch_event(adev, record->last_touch_z, record->last_touch_rz, id_r, rs_state);
+	}
+
+	input_report_key(adev->mt_input, BTN_TOUCH, aks_gamepad_touch_number[0] ? 1 : 0);
 	input_sync(adev->mt_input);
 
 	mutex_unlock(&adev->mutex);
@@ -771,7 +975,7 @@ static bool only_key_mode(unsigned int code)
 		return false;
 	}
 }
-	
+
 static void aks_gamepad_gpio_keys_gpio_report_event(struct aks_gpio_button_data *bdata)
 {
 	const struct gpio_keys_button *button = bdata->button;
@@ -792,7 +996,7 @@ static void aks_gamepad_gpio_keys_gpio_report_event(struct aks_gpio_button_data 
 		if(aks_dev->mt_input && type != EV_ABS) { //Ignore the abs events for gpio
 			mutex_lock(&aks_dev->mt_input->mutex);
 			aks_gamepad_handle_button_to_touch(aks_dev, button->code, state);
-			input_report_key(aks_dev->mt_input, BTN_TOUCH, touched_num > 0 ? 1 : 0);
+			input_report_key(aks_dev->mt_input, BTN_TOUCH, aks_gamepad_touch_number[0] ? 1 : 0);
 			input_sync(aks_dev->mt_input);
 			mutex_unlock(&aks_dev->mt_input->mutex);
 		} else {
@@ -1489,8 +1693,8 @@ static void aks_gamepad_analog_calibrate(struct aks_analog_key_data *adata)
 			axis->cali.logic_half_distance = ((axis->cali.rang_max_calied - axis->cali.rang_min_calied) >> 1);
 			axis->cali.ratio_pos = (( axis->cali.logic_half_distance << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_max);
 			axis->cali.ratio_neg = (( axis->cali.logic_half_distance << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_min);
-			axis->cali.enlarge_ratio_max = ((1 << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_max);
-			axis->cali.enlarge_ratio_min = ((1 << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_min);
+			axis->cali.enlarge_ratio_max = ((1 << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_min);
+			axis->cali.enlarge_ratio_min = ((1 << AKS_GAMEPAD_ENLARGE_SHIFT) / axis->cali.dist_max);
 		} else if(axis->code == ABS_BRAKE || axis->code == ABS_GAS) {
 			#if 0
 			axis->cali.rang_min_calied = axis->cali.physic_zero_pos;
@@ -1503,11 +1707,13 @@ static void aks_gamepad_analog_calibrate(struct aks_analog_key_data *adata)
 			axis->cali.rang_max_calied = 501;
 			#endif
 		}
+		/*
 		dev_err(g_aks_dev->dev, "code=%d, min=%d, max=%d, cali_min=%d, cali_max=%d, ratio_pos=%d, ratio_neg=%d, pc=%d, lc=%d\n", \
 			axis->code, axis->cali.rang_min, axis->cali.rang_max, \
 			axis->cali.rang_min_calied, axis->cali.rang_max_calied, \
 			axis->cali.ratio_pos, axis->cali.ratio_neg, \
 			axis->cali.physic_zero_pos, axis->cali.logic_zero_pos);
+		*/
 	}
 }
 
@@ -1530,9 +1736,10 @@ static int aks_gamepad_analog_update_paras(struct aks_analog_key_data *adata) {
 				adata->axes[i].cali.rang_min_calied, adata->axes[i].cali.rang_max_calied, \
 				adata->axes[i].fuzz, adata->axes[i].flat);
 		}
-
+/*
 		dev_err(g_aks_dev->dev, "code=%d, cali_min=%d, cali_max=%d\n", \
 			adata->axes[i].code, adata->axes[i].cali.rang_min_calied, adata->axes[i].cali.rang_max_calied);
+*/
 	}
 	return 0;
 }
@@ -1615,10 +1822,11 @@ static int aks_gamepad_analog_keys_set_axes(struct device *dev, struct aks_analo
 
         fwnode_property_read_u32(child, "abs-fuzz", &axes[i].fuzz);
         fwnode_property_read_u32(child, "abs-flat", &axes[i].flat);
+		/*
         dev_err(dev, "%s(%d) linux,code=<%d>, abs-range= %d ~ %d, abs-fuzz= %d, abs-flat=%d!\n",\
 			__FUNCTION__, __LINE__, \
             axes[i].code, axes[i].range[0], axes[i].range[1], axes[i].fuzz, axes[i].flat);
-
+		*/
         input_set_abs_params(joy->input, axes[i].code, axes[i].range[0], axes[i].range[1], axes[i].fuzz, axes[i].flat);
         input_set_capability(joy->input, EV_ABS, axes[i].code);
     }
@@ -1768,7 +1976,7 @@ static int aks_gamepad_configure_mt_dev(struct aks_input_device *aks_dev)
 static int aks_gamepad_input_open(struct input_dev *input)
 {
 	struct aks_input_device *aks_dev = input_get_drvdata(input);
-	dev_err(g_aks_dev->dev, "---> %s(%d)\n",__FUNCTION__, __LINE__);
+	dev_err(g_aks_dev->dev, "---> input_open (%d)\n", __LINE__);
 
 	ask_gamepad_gpio_keys_open(aks_dev);
 
@@ -1779,7 +1987,7 @@ static void aks_gamepad_input_close(struct input_dev *input)
 {
 	struct aks_input_device *aks_dev = input_get_drvdata(input);
 
-	dev_err(g_aks_dev->dev, "---> %s(%d)\n",__FUNCTION__, __LINE__);
+	dev_err(g_aks_dev->dev, "---> input_close(%d)\n", __LINE__);
 	ask_gamepad_gpio_keys_close(aks_dev);
 }
 
@@ -1888,7 +2096,7 @@ long aks_input_cdev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     int ioarg = 0;
 	struct aks_input_device *devp = filp->private_data;
 	if(devp == NULL) {
-		dev_err(g_aks_dev->dev, "---> %s(%d) filp->private_data is NULL\n",__FUNCTION__, __LINE__);
+		dev_err(g_aks_dev->dev, "---> %s(%d) private data is NULL\n",__FUNCTION__, __LINE__);
 	}
 
     if (_IOC_TYPE(cmd) != AKS_IOC_MAGIC) 
@@ -1999,37 +2207,25 @@ static ssize_t aks_input_cdev_read(struct file *filp, char __user *buf, size_t s
 #endif 
 }
 
-static void dump_mapping_data(struct mapping_data mdata)
+static void dump_mapping_data(struct aks_multitouch_data *mt_data)
 {
-	dev_err(g_aks_dev->dev, " a:  %d, %d", mdata.a.x,mdata.a.y);
-	dev_err(g_aks_dev->dev, " b:  %d, %d", mdata.b.x,mdata.b.y);
-	dev_err(g_aks_dev->dev, " x:  %d, %d", mdata.x.x,mdata.x.y);
-	dev_err(g_aks_dev->dev, " y:  %d, %d", mdata.y.x,mdata.y.y);
-	dev_err(g_aks_dev->dev, "l1:  %d, %d", mdata.l1.x,mdata.l1.y);
-	dev_err(g_aks_dev->dev, "r1:  %d, %d", mdata.r1.x,mdata.r1.y);
-	dev_err(g_aks_dev->dev, "l2:  %d, %d", mdata.l2.x,mdata.l2.y);
-	dev_err(g_aks_dev->dev, "r2:  %d, %d", mdata.r2.x,mdata.r2.y);
-	dev_err(g_aks_dev->dev, "du:  %d, %d", mdata.du.x,mdata.du.y);
-	dev_err(g_aks_dev->dev, "dd:  %d, %d", mdata.dd.x,mdata.dd.y);
-	dev_err(g_aks_dev->dev, "dl:  %d, %d", mdata.dl.x,mdata.dl.y);
-	dev_err(g_aks_dev->dev, "dr:  %d, %d", mdata.dr.x,mdata.dr.y);
-	dev_err(g_aks_dev->dev, "l3:  %d, %d", mdata.l3.x,mdata.l3.y);
-	dev_err(g_aks_dev->dev, "r3:  %d, %d", mdata.r3.x,mdata.r3.y);
-	dev_err(g_aks_dev->dev, "ls:  %d, %d", mdata.ls.x,mdata.ls.y);
-	dev_err(g_aks_dev->dev, "rs:  %d, %d", mdata.rs.x,mdata.rs.y);
-	dev_err(g_aks_dev->dev, "select:  %d, %d", mdata.select.x, mdata.select.y);
-	dev_err(g_aks_dev->dev, " start:  %d, %d", mdata.start.x, mdata.start.y);
-	dev_err(g_aks_dev->dev, "  mode:  %d, %d", mdata.mode.x, mdata.mode.y);
-	dev_err(g_aks_dev->dev, "  func:  %d, %d", mdata.fn.x, mdata.fn.y);
-	dev_err(g_aks_dev->dev, " sysrq:  %d, %d", mdata.sysrq.x, mdata.sysrq.y);
-	dev_err(g_aks_dev->dev, "  slot:  %d", mdata.slot);
-	dev_err(g_aks_dev->dev, "   Rot:  %d", mdata.rotation);
-	dev_err(g_aks_dev->dev, "lsType:  %d", mdata.ls_type);
-	dev_err(g_aks_dev->dev, "rsType:  %d", mdata.rs_type);
-	dev_err(g_aks_dev->dev, "lsSize:  %d", mdata.ls_size);
-	dev_err(g_aks_dev->dev, "rsSize:  %d", mdata.rs_size);
-	dev_err(g_aks_dev->dev, " lBind:  %d", mdata.l_bind);
-	dev_err(g_aks_dev->dev, " rBind:  %d", mdata.r_bind);
+	int i=0;
+	for(i=0; i<AKS_GAMEPAD_BINDABLE_KEYS; i++) {
+		dev_err(g_aks_dev->dev, " keycode=%d:  x=%d, y=%d", mt_data->mapping_coords[i].keycode , mt_data->mapping_coords[i].x, mt_data->mapping_coords[i].y);
+	}
+
+	dev_err(g_aks_dev->dev, "======== Properties: ");
+
+	dev_err(g_aks_dev->dev, "       Slot = %d ", mt_data->mapping_props.slot);
+	dev_err(g_aks_dev->dev, "   rotation = %d ", mt_data->mapping_props.rotation);
+	dev_err(g_aks_dev->dev, "    ls_type = %d ", mt_data->mapping_props.ls_type);
+	dev_err(g_aks_dev->dev, "    rs_type = %d ", mt_data->mapping_props.rs_type);
+	dev_err(g_aks_dev->dev, "    ls_size = %d ", mt_data->mapping_props.ls_size);
+	dev_err(g_aks_dev->dev, "    rs_size = %d ", mt_data->mapping_props.rs_size);
+	dev_err(g_aks_dev->dev, " l_bind_key = %d ", mt_data->mapping_props.l_bind_key[0]);
+	dev_err(g_aks_dev->dev, " r_bind_key = %d ", mt_data->mapping_props.r_bind_key[0]);
+	dev_err(g_aks_dev->dev, "   ls x=%d, y=%d", mt_data->mapping_props.ls.x, mt_data->mapping_props.ls.y);
+	dev_err(g_aks_dev->dev, "   rs x=%d, y=%d", mt_data->mapping_props.rs.x, mt_data->mapping_props.rs.y);
 }
 
 static inline int need_parse_pair(char* key)
@@ -2057,7 +2253,28 @@ static inline int need_parse_pair(char* key)
 		(!strcmp(key,"Sysrq"));
 }
 
-static int pares_pair(struct mapping_data *mdata, struct kv_pair pair, const char* delim) {
+static int fill_up_keycode_bit_map(unsigned int keycode, int x, int y) {
+	int pos = find_keycode_bit_map_index_by_code(keycode);
+	if(pos != -1) {
+		aks_gamepad_keycode_bit_map[pos].coord.x = x;
+		aks_gamepad_keycode_bit_map[pos].coord.y = y;
+		return 0;
+	} else {
+		dev_err(g_aks_dev->dev,"Warning, keycode %d not found in the bit-map!\n", keycode);
+		return -1;
+	}
+}
+
+static void setup_mapping_data(struct aks_multitouch_data *mt_data, unsigned int keycode, int x, int y, int id) {
+	mt_data->mapping_coords[mt_data->mapping_coords_index].keycode = keycode;
+	mt_data->mapping_coords[mt_data->mapping_coords_index].x = x;
+	mt_data->mapping_coords[mt_data->mapping_coords_index].y = y;
+	mt_data->mapping_coords[mt_data->mapping_coords_index].id = id;
+	fill_up_keycode_bit_map(keycode, x, y);
+	mt_data->mapping_coords_index++;
+}
+
+static int pares_pair(struct aks_multitouch_data *mt_data, struct kv_pair pair, const char* delim) {
 	struct aks_js_mt_status_recoder* record = &g_aks_dev->js_record;
 	char *token, *cur;
 	int x=0, y=0;
@@ -2074,75 +2291,58 @@ static int pares_pair(struct mapping_data *mdata, struct kv_pair pair, const cha
 		} else if(idx == 1) {
 			y = simple_strtoul(token, NULL, 10);
 		}
-		if(idx > 0) {			
-			//Slot:0;Rotation:0;LsType:0;RsType:2;LsSize:3;RsSize:3;LBind:1;RBind:2
+		if(idx > 0) {
 			if(strcmp(pair.key, "A") == 0) {
-				mdata->a.x = x;
-				mdata->a.y = y;
+				setup_mapping_data(mt_data, BTN_A, x, y, MT_ID_A);
 			} else if (strcmp(pair.key, "B") == 0) {
-				mdata->b.x = x;
-				mdata->b.y = y;
+				setup_mapping_data(mt_data, BTN_B, x, y, MT_ID_B);
 			} else if (strcmp(pair.key, "X") == 0) {
-				mdata->x.x = x;
-				mdata->x.y = y;
+				setup_mapping_data(mt_data, BTN_X, x, y, MT_ID_X);
 			} else if (strcmp(pair.key, "Y") == 0) {
-				mdata->y.x = x;
-				mdata->y.y = y;
+				setup_mapping_data(mt_data, BTN_Y, x, y, MT_ID_Y);
 			} else if (strcmp(pair.key, "L1") == 0) {
-				mdata->l1.x = x;
-				mdata->l1.y = y;
+				setup_mapping_data(mt_data, BTN_TL, x, y, MT_ID_L1);
 			} else if (strcmp(pair.key, "R1") == 0) {
-				mdata->r1.x = x;
-				mdata->r1.y = y;
+				setup_mapping_data(mt_data, BTN_TR, x, y, MT_ID_R1);
 			} else if (strcmp(pair.key, "L2") == 0) {
-				mdata->l2.x = x;
-				mdata->l2.y = y;
+				setup_mapping_data(mt_data, ABS_BRAKE, x, y, MT_ID_L2);
 			} else if (strcmp(pair.key, "R2") == 0) {
-				mdata->r2.x = x;
-				mdata->r2.y = y;
+				setup_mapping_data(mt_data, ABS_GAS, x, y, MT_ID_R2);
 			} else if (strcmp(pair.key, "Up") == 0) {
-				mdata->du.x = x;
-				mdata->du.y = y;
+				setup_mapping_data(mt_data, BTN_DPAD_UP, x, y, MT_ID_DU);
 			} else if (strcmp(pair.key, "Down") == 0) {
-				mdata->dd.x = x;
-				mdata->dd.y = y;
+				setup_mapping_data(mt_data, BTN_DPAD_DOWN, x, y, MT_ID_DD);
 			} else if (strcmp(pair.key, "Left") == 0) {
-				mdata->dl.x = x;
-				mdata->dl.y = y;
+				setup_mapping_data(mt_data, BTN_DPAD_LEFT, x, y, MT_ID_DL);
 			} else if (strcmp(pair.key, "Right") == 0) {
-				mdata->dr.x = x;
-				mdata->dr.y = y;
+				setup_mapping_data(mt_data, BTN_DPAD_RIGHT, x, y, MT_ID_DR);
 			} else if (strcmp(pair.key, "L3") == 0) {
-				mdata->l3.x = x;
-				mdata->l3.y = y;
+				setup_mapping_data(mt_data, BTN_THUMBL, x, y, MT_ID_L3);
 			} else if (strcmp(pair.key, "R3") == 0) {
-				mdata->r3.x = x;
-				mdata->r3.y = y;
+				setup_mapping_data(mt_data, BTN_THUMBR, x, y, MT_ID_R3);
 			} else if (strcmp(pair.key, "LStick") == 0) {
-				mdata->ls.x = x;
-				mdata->ls.y = y;
 				record->last_touch_x = x;
 				record->last_touch_y = y;
+				mt_data->mapping_props.ls.x = x;
+				mt_data->mapping_props.ls.y = y;
+				setup_mapping_data(mt_data, BTN_JOYSTICK, x, y, MT_ID_LS);
 			} else if (strcmp(pair.key, "RStick") == 0) {
-				mdata->rs.x = x;
-				mdata->rs.y = y;
 				record->last_touch_z = x;
 				record->last_touch_rz = y;
+				mt_data->mapping_props.rs.x = x;
+				mt_data->mapping_props.rs.y = y;
+				//record->last_binding_rs = true;
+				setup_mapping_data(mt_data, BTN_JOYSTICK, x, y, MT_ID_RS);
 			} else if (strcmp(pair.key, "Select") == 0) {
-				mdata->select.x = x;
-				mdata->select.y = y;
+				setup_mapping_data(mt_data, BTN_SELECT, x, y, MT_ID_SELECT);
 			} else if (strcmp(pair.key, "Start") == 0) {
-				mdata->start.x = x;
-				mdata->start.y = y;
+				setup_mapping_data(mt_data, BTN_START, x, y, MT_ID_START);
 			} else if (strcmp(pair.key, "Mode") == 0) {
-				mdata->mode.x = x;
-				mdata->mode.y = y;
+				setup_mapping_data(mt_data, BTN_MODE, x, y, MT_ID_MODE);
 			} else if (strcmp(pair.key, "Fn") == 0) {
-				mdata->fn.x = x;
-				mdata->fn.y = y;
+				setup_mapping_data(mt_data, KEY_FN, x, y, MT_ID_FUNC);
 			} else if (strcmp(pair.key, "Sysrq") == 0) {
-				mdata->sysrq.x = x;
-				mdata->sysrq.y = y;
+				setup_mapping_data(mt_data, KEY_SYSRQ, x, y, MT_ID_SYSRQ);
 			} else {
 				dev_err(g_aks_dev->dev,"Error, Button not found: %s!\n", pair.key);
 			}
@@ -2152,12 +2352,12 @@ static int pares_pair(struct mapping_data *mdata, struct kv_pair pair, const cha
 	return 0;
 }
 
-static int pares_member(struct mapping_data *mdata,  char* str, const char* delim, int index) {
+static int pares_member(struct aks_multitouch_data *mt_data,  char* str, const char* delim, int index) {
 	char *token, *cur;
 	char* const delim_next= ",";
-	int tmp = 0;
-	int idx = 0;
+	int tmp=0, idx=0;
 	char data[64];
+
 	memset(kvs, '\0', sizeof(kvs));
 	memset(data, '\0', sizeof(data));
 	strcpy(data, str);
@@ -2170,37 +2370,37 @@ static int pares_member(struct mapping_data *mdata,  char* str, const char* deli
 		}
 		if(idx > 0) {
 			if(need_parse_pair(kvs[index].key)) {
-				pares_pair(mdata, kvs[index], delim_next);
+				pares_pair(mt_data, kvs[index], delim_next);
 			} else {
 				//dev_err(g_aks_dev->dev,"[%s]value-> %d\n",kvs[index].key, simple_strtoul(kvs[index].value, NULL, 10));
 				if(strcmp(kvs[index].key, "Slot") == 0) {
-					mdata->slot = simple_strtoul(kvs[index].value, NULL, 10);
+					mt_data->mapping_props.slot = simple_strtoul(kvs[index].value, NULL, 10);
 				} else if (strcmp(kvs[index].key, "Rotation") == 0) {
 					tmp = simple_strtoul(kvs[index].value, NULL, 10);
 					if(tmp > 3 || tmp < 0) {
 						tmp = 3;
 					}
-					mdata->rotation = tmp;
+					mt_data->mapping_props.rotation = tmp;
 				} else if (strcmp(kvs[index].key, "LsType") == 0) {
-					mdata->ls_type = simple_strtoul(kvs[index].value, NULL, 10);
+					mt_data->mapping_props.ls_type = simple_strtoul(kvs[index].value, NULL, 10);
 				} else if (strcmp(kvs[index].key, "RsType") == 0) {
-					mdata->rs_type = simple_strtoul(kvs[index].value, NULL, 10);
+					mt_data->mapping_props.rs_type = simple_strtoul(kvs[index].value, NULL, 10);
 				} else if (strcmp(kvs[index].key, "LsSize") == 0) {
 					tmp = simple_strtoul(kvs[index].value, NULL, 10);
 					if(tmp > 3 || tmp < 0) {
 						tmp = 3;
 					}
-					mdata->ls_size = tmp;
+					mt_data->mapping_props.ls_size = tmp;
 				} else if (strcmp(kvs[index].key, "RsSize") == 0) {
 					tmp = simple_strtoul(kvs[index].value, NULL, 10);
 					if(tmp > 3 || tmp < 0) {
 						tmp = 3;
 					}
-					mdata->rs_size = tmp;
+					mt_data->mapping_props.rs_size = tmp;
 				} else if (strcmp(kvs[index].key, "LBind") == 0) {
-					mdata->l_bind = simple_strtoul(kvs[index].value, NULL, 10);
+					mt_data->mapping_props.l_bind_key[0] = simple_strtoul(kvs[index].value, NULL, 10);
 				} else if (strcmp(kvs[index].key, "RBind") == 0) {
-					mdata->r_bind = simple_strtoul(kvs[index].value, NULL, 10);
+					mt_data->mapping_props.r_bind_key[0] = simple_strtoul(kvs[index].value, NULL, 10);
 				} else {
 					dev_err(g_aks_dev->dev,"Error, Mapping key not found: %s", kvs[index].key);
 				}
@@ -2210,8 +2410,6 @@ static int pares_member(struct mapping_data *mdata,  char* str, const char* deli
 	}
 	return 0;
 }
-
-
 
 static int aks_gamepad_parse_mt_mapping_data(char* config) {
 	struct aks_input_device *devp = g_aks_dev;
@@ -2229,11 +2427,11 @@ static int aks_gamepad_parse_mt_mapping_data(char* config) {
 
 	while ((token = strsep(&cur, delim))) {
 		//dev_err(g_aks_dev->dev, "%s\n", token);
-		pares_member(&devp->mt_data->mapping_data, token, delim_next, index);
+		pares_member(devp->mt_data, token, delim_next, index);
 		index++;
 	}
 
-	dump_mapping_data(devp->mt_data->mapping_data);
+	dump_mapping_data(devp->mt_data);
 
 	return 0;
 }
@@ -2245,13 +2443,19 @@ static ssize_t aks_input_cdev_write(struct file *filp, const char __user *buf, s
 	int ret = 0;
 	struct aks_input_device *devp = filp->private_data;
 
+	mutex_lock(&devp->ipc_mutex);
+	//MUST reset the raw data buffer
+	memset(devp->mt_data->raw, '\0', AKS_MAPPING_DATA_MAX_LENGTH);
+
 	ret = copy_from_user((void *)(devp->mt_data->raw), buf, count);
 	if (ret) {
 		dev_err(g_aks_dev->dev, "---> %s(%d) ->error=%d\n",__FUNCTION__, __LINE__, ret);
 	} else {
 		dev_err(g_aks_dev->dev, "--->(%d) -> %s\n", __LINE__, devp->mt_data->raw);
+		devp->mt_data->mapping_coords_index = 0;
 		aks_gamepad_parse_mt_mapping_data(devp->mt_data->raw);
 	}
+	mutex_unlock(&devp->ipc_mutex);
 	return ret;
 }
 
@@ -2266,7 +2470,7 @@ static const struct file_operations aks_input_cdev_fops =
   .write = aks_input_cdev_write,
 };
 
-#define AKS_INPUT_CDEV_CLASS_MODE ((umode_t)(S_IRUGO |S_IWUGO ))
+#define AKS_INPUT_CDEV_CLASS_MODE ((umode_t)(S_IRUGO |S_IWUGO))
 
 static char *aks_input_class_devnode(struct device *dev, umode_t *mode)
 {
@@ -2364,7 +2568,8 @@ static int aks_gamepad_probe(struct platform_device *pdev)
 	dev_set_drvdata(dev, g_aks_dev);
 	platform_set_drvdata(pdev, g_aks_dev);
 
-	//bitmap_zero(&mt_id_status, MT_ID_NUMBERS);
+	bitmap_zero(aks_gamepad_button_status, AKS_GAMEPAD_KEYCODE_BITS_MAX);
+	bitmap_zero(aks_gamepad_touch_number, AKS_GAMEPAD_BINDABLE_KEYS);
 
 	error = aks_gamepad_config_input_dev(pdev);
 
@@ -2380,6 +2585,7 @@ static int aks_gamepad_probe(struct platform_device *pdev)
 	}
 
 	mutex_init(&g_aks_dev->mutex);
+	mutex_init(&g_aks_dev->ipc_mutex);
 	dev_err(g_aks_dev->dev, "------> AKS gamepad driver preobe done <------\n");
     return 0;
 }
