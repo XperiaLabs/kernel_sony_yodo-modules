@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config AKS_ADC_JOYSTICK
+	tristate "AKS input driver"
+	depends on IIO
+	select IIO_BUFFER_CB
+	help
+	  Say Y here if you have a aks input driver.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called aks-input.
