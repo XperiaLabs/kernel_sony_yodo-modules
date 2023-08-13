@@ -17,7 +17,7 @@ LOCAL_PATH := $(call my-dir)
 ifneq ($(findstring vendor,$(LOCAL_PATH)),)
 
 ifneq ($(findstring opensource,$(LOCAL_PATH)),)
-	JS_BLD_DIR := $(abspath .)/vendor/qcom/opensource/ecosw/aks_js_drivers
+	JS_BLD_DIR := kernel/sony/sm8550-modules/qcom/ecosw/aks_js_drivers
 endif # opensource
 
 DLKM_DIR := $(TOP)/device/qcom/common/dlkm
