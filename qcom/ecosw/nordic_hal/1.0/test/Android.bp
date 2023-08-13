@@ -9,7 +9,6 @@ cc_binary {
         "libbinder",
         "libhardware",
         "libhidlbase",
-        "libhidltransport",
         "libutils",
         "vendor.shadowcreator.hardware.nordic@1.0",
     ],
