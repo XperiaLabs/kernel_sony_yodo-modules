@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -13,6 +13,7 @@
 #include "adreno_gen7.h"
 #include "adreno_gen7_hwsched.h"
 #include "adreno_snapshot.h"
+#include "kgsl_bus.h"
 #include "kgsl_device.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
@@ -887,12 +888,6 @@ static int gen7_hwsched_power_off(struct adreno_device *adreno_dev)
 	/* process any profiling results that are available */
 	adreno_profile_process_results(ADRENO_DEVICE(device));
 
-	if (!gen7_hw_isidle(adreno_dev)) {
-		dev_err(&gmu->pdev->dev, "GPU isn't idle before SLUMBER\n");
-		gmu_core_fault_snapshot(device);
-		goto no_gx_power;
-	}
-
 	ret = gen7_gmu_oob_set(device, oob_gpu);
 	if (ret) {
 		gen7_gmu_oob_clear(device, oob_gpu);
@@ -955,7 +950,12 @@ static void hwsched_idle_check(struct work_struct *work)
 	if (test_bit(GMU_DISABLE_SLUMBER, &device->gmu_core.flags))
 		goto done;
 
-	if (!atomic_read(&device->active_cnt)) {
+	if (!atomic_read(&device->active_cnt) &&
+		time_is_before_eq_jiffies(device->idle_jiffies)) {
+		if (!gen7_hw_isidle(adreno_dev)) {
+			dev_err(device->dev, "GPU isn't idle before SLUMBER\n");
+			gmu_core_fault_snapshot(device);
+		}
 		gen7_hwsched_power_off(adreno_dev);
 	} else {
 		kgsl_pwrscale_update(device);
@@ -1121,6 +1121,8 @@ static int gen7_hwsched_bus_set(struct adreno_device *adreno_dev, int buslevel,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	int ret = 0;
+
+	kgsl_icc_set_tag(pwr, buslevel);
 
 	if (buslevel != pwr->cur_buslevel) {
 		ret = gen7_hwsched_dcvs_set(adreno_dev, INVALID_DCVS_IDX,
